@@ -18,7 +18,7 @@ import type { ManagedAccount, KiroAuthDetails } from './plugin/types';
 import { KIRO_CONSTANTS } from './constants';
 
 const KIRO_PROVIDER_ID = 'kiro';
-const KIRO_API_PATTERN = /q\.(us-east-1|us-west-2)\.amazonaws\.com/;
+const KIRO_API_PATTERN = /^(https?:\/\/)?q\.[a-z0-9-]+\.amazonaws\.com/;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -80,6 +80,9 @@ export const createKiroPlugin = (providerId: string) => async (
             const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
 
             if (!KIRO_API_PATTERN.test(url)) {
+              if (config.debug) {
+                console.debug('[kiro-auth] URL does not match pattern, passing through:', url);
+              }
               return fetch(input, init);
             }
 
@@ -254,7 +257,7 @@ export const createKiroPlugin = (providerId: string) => async (
       methods: [
         {
           id: 'social',
-          name: 'Google OAuth (Social)',
+          label: 'Google OAuth (Social)',
           type: 'oauth',
           authorize: async () => {
             return new Promise(async (resolve) => {
@@ -304,7 +307,7 @@ export const createKiroPlugin = (providerId: string) => async (
         },
         {
           id: 'idc',
-          name: 'AWS Builder ID (IDC)',
+          label: 'AWS Builder ID (IDC)',
           type: 'oauth',
           authorize: async () => {
             return new Promise(async (resolve) => {

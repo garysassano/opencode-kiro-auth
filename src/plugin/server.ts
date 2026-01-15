@@ -336,12 +336,13 @@ export async function startIDCAuthServer(
     const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
       const url = req.url || '';
       
-      if (url === '/' || url.startsWith('/?')) {
-        const html = getIDCAuthHtml(
-          authData.verificationUrl,
-          authData.verificationUriComplete,
-          authData.userCode
-        );
+        if (url === '/' || url.startsWith('/?')) {
+          const statusUrl = `http://localhost:${port}/status`;
+          const html = getIDCAuthHtml(
+            authData.verificationUriComplete,
+            authData.userCode,
+            statusUrl
+          );
         sendHtmlResponse(res, html);
         return;
       }

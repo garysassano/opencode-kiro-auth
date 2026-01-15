@@ -9,6 +9,7 @@ import type {
   RefreshParts,
 } from './types';
 import * as logger from './logger';
+import { KIRO_CONSTANTS } from '../constants';
 
 export function generateAccountId(): string {
   return randomBytes(16).toString('hex');
@@ -100,7 +101,7 @@ export class AccountManager {
       id: meta.id,
       email: meta.email,
       authMethod: meta.authMethod,
-      region: meta.region,
+      region: meta.region || KIRO_CONSTANTS.DEFAULT_REGION,
       profileArn: meta.profileArn,
       clientId: meta.clientId,
       clientSecret: meta.clientSecret,
@@ -297,7 +298,7 @@ export class AccountManager {
       access: account.accessToken,
       expires: account.expiresAt,
       authMethod: account.authMethod,
-      region: account.region,
+      region: account.region || KIRO_CONSTANTS.DEFAULT_REGION,
       profileArn: account.profileArn,
       clientId: account.clientId,
       clientSecret: account.clientSecret,

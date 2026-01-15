@@ -331,7 +331,11 @@ export function transformToCodeWhisperer(
     request.profileArn = auth.profileArn;
   }
 
-  const finalUrl = KIRO_CONSTANTS.BASE_URL.replace('{{region}}', auth.region);
+  const region = auth.region || 'us-east-1';
+  const finalUrl = KIRO_CONSTANTS.BASE_URL.replace('{{region}}', region);
+  if (!finalUrl || !finalUrl.startsWith('https://')) {
+    throw new Error(`Invalid URL constructed: ${finalUrl}`);
+  }
   const machineId = generateMachineId(auth);
   const userAgent = buildUserAgent(machineId);
 
