@@ -3,7 +3,7 @@ import { loadConfig } from './plugin/config';
 import { AccountManager, generateAccountId } from './plugin/accounts';
 import { createProactiveRefreshQueue } from './plugin/refresh-queue';
 import { createSessionRecoveryHook } from './plugin/recovery';
-import { accessTokenExpired, parseRefreshParts, encodeRefreshToken } from './kiro/auth';
+import { accessTokenExpired, decodeRefreshToken, encodeRefreshToken } from './kiro/auth';
 import { refreshAccessToken } from './plugin/token';
 import { transformToCodeWhisperer } from './plugin/request';
 import { parseEventStream } from './plugin/response';
@@ -80,9 +80,6 @@ export const createKiroPlugin = (providerId: string) => async (
             const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
 
             if (!KIRO_API_PATTERN.test(url)) {
-              if (config.debug) {
-                console.debug('[kiro-auth] URL does not match pattern, passing through:', url);
-              }
               return fetch(input, init);
             }
 
@@ -95,13 +92,35 @@ export const createKiroPlugin = (providerId: string) => async (
             const thinkingEnabled = isThinkingModel || !!thinkingConfig;
             const thinkingBudget = thinkingConfig?.thinkingBudget || config.thinking_budget_tokens;
 
+            const rateLimitStateByAccount = new Map<string, { consecutive429: number; lastAt: number }>();
+            const RATE_LIMIT_DEDUP_WINDOW_MS = 2000;
+
+            const showToast = async (message: string, variant: 'info' | 'warning' | 'success' | 'error') => {
+              try {
+                await client.tui.showToast({ body: { message, variant } });
+              } catch {}
+            };
+
             let retryCount = 0;
             const maxRetries = config.rate_limit_max_retries;
 
-            while (retryCount <= maxRetries) {
+            while (true) {
+              const accountCount = accountManager.getAccountCount();
+              if (accountCount === 0) throw new Error('No available Kiro accounts. Run `opencode auth login`.');
+
               const account = accountManager.getCurrentOrNext();
+              
               if (!account) {
-                throw new Error('No available Kiro accounts');
+                const waitMs = accountManager.getMinWaitTime() || 60000;
+                await showToast(`All accounts rate-limited. Waiting ${Math.ceil(waitMs/1000)}s...`, 'warning');
+                await sleep(waitMs);
+                continue;
+              }
+
+              const accountIndex = accountManager.getAccounts().indexOf(account);
+              if (accountCount > 1 && accountManager.shouldShowAccountToast(accountIndex)) {
+                await showToast(`Using ${account.email} (${accountIndex + 1}/${accountCount})`, 'info');
+                accountManager.markToastShown(accountIndex);
               }
 
               const authDetails = accountManager.toAuthDetails(account);
@@ -125,7 +144,7 @@ export const createKiroPlugin = (providerId: string) => async (
                 url,
                 init?.body as string,
                 model,
-                authDetails,
+                accountManager.toAuthDetails(account),
                 thinkingEnabled,
                 thinkingBudget
               );
@@ -133,131 +152,130 @@ export const createKiroPlugin = (providerId: string) => async (
               try {
                 const response = await fetch(prepared.url, prepared.init);
 
-                if (!response.ok) {
-                  const status = response.status;
-
-                  if (status === 401 && retryCount === 0) {
-                    const refreshed = await refreshAccessToken(authDetails);
-                    accountManager.updateFromAuth(account, refreshed);
-                    await accountManager.saveToDisk();
-                    retryCount++;
-                    continue;
+                if (response.ok) {
+                  if (config.usage_tracking_enabled) {
+                    fetchUsageLimits(accountManager.toAuthDetails(account))
+                      .then(usage => {
+                        updateAccountQuota(account, usage);
+                        accountManager.saveToDisk();
+                      }).catch(() => {});
                   }
 
-                  if (status === 402) {
-                    const recoveryTime = calculateRecoveryTime();
-                    accountManager.markUnhealthy(account, 'Quota exhausted', recoveryTime);
-                    await accountManager.saveToDisk();
-                    retryCount++;
-                    continue;
-                  }
-
-                  if (status === 403) {
-                    accountManager.markUnhealthy(account, 'Forbidden');
-                    await accountManager.saveToDisk();
-                    retryCount++;
-                    continue;
-                  }
-
-                  if (status === 429) {
-                    const retryAfter = parseInt(response.headers.get('retry-after') || '60') * 1000;
-                    accountManager.markRateLimited(account, retryAfter);
-                    await accountManager.saveToDisk();
-                    await sleep(config.rate_limit_retry_delay_ms);
-                    retryCount++;
-                    continue;
-                  }
-
-                  throw new Error(`Kiro API error: ${status}`);
-                }
-
-                if (config.usage_tracking_enabled) {
-                  try {
-                    const usage = await fetchUsageLimits(authDetails);
-                    updateAccountQuota(account, usage);
-                    await accountManager.saveToDisk();
-                  } catch (error) {
-                    if (config.debug) {
-                      console.error('Failed to fetch usage:', error);
-                    }
-                  }
-                }
-
-                if (prepared.streaming) {
-                  const stream = transformKiroStream(response, model, prepared.conversationId);
-                  return new Response(
-                    new ReadableStream({
-                      async start(controller) {
-                        try {
-                          for await (const event of stream) {
-                            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                  if (prepared.streaming) {
+                    const stream = transformKiroStream(response, model, prepared.conversationId);
+                    return new Response(
+                      new ReadableStream({
+                        async start(controller) {
+                          try {
+                            for await (const event of stream) {
+                              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                            }
+                            controller.close();
+                          } catch (error) {
+                            controller.error(error);
                           }
-                          controller.close();
-                        } catch (error) {
-                          controller.error(error);
+                        }
+                      }),
+                      {
+                        headers: {
+                          'Content-Type': 'text/event-stream',
+                          'Cache-Control': 'no-cache',
+                          'Connection': 'keep-alive',
                         }
                       }
-                    }),
-                    {
-                      headers: {
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                        'Connection': 'keep-alive',
-                      }
-                    }
-                  );
-                } else {
-                  const text = await response.text();
-                  const parsed = parseEventStream(text);
-
-                  const openaiResponse: any = {
-                    id: prepared.conversationId,
-                    object: 'chat.completion',
-                    created: Math.floor(Date.now() / 1000),
-                    model: model,
-                    choices: [
-                      {
-                        index: 0,
-                        message: {
-                          role: 'assistant',
-                          content: parsed.content,
-                        },
-                        finish_reason: parsed.stopReason === 'tool_use' ? 'tool_calls' : 'stop',
-                      }
-                    ],
-                    usage: {
-                      prompt_tokens: parsed.inputTokens || 0,
-                      completion_tokens: parsed.outputTokens || 0,
-                      total_tokens: (parsed.inputTokens || 0) + (parsed.outputTokens || 0),
-                    },
-                  };
-
-                  if (parsed.toolCalls.length > 0) {
-                    openaiResponse.choices[0].message.tool_calls = parsed.toolCalls.map((tc, index) => ({
-                      id: tc.toolUseId,
-                      type: 'function',
-                      function: {
-                        name: tc.name,
-                        arguments: typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input),
+                    );
+                  } else {
+                    const text = await response.text();
+                    const parsed = parseEventStream(text);
+                    const openaiResponse: any = {
+                      id: prepared.conversationId,
+                      object: 'chat.completion',
+                      created: Math.floor(Date.now() / 1000),
+                      model: model,
+                      choices: [
+                        {
+                          index: 0,
+                          message: { role: 'assistant', content: parsed.content },
+                          finish_reason: parsed.stopReason === 'tool_use' ? 'tool_calls' : 'stop',
+                        }
+                      ],
+                      usage: {
+                        prompt_tokens: parsed.inputTokens || 0,
+                        completion_tokens: parsed.outputTokens || 0,
+                        total_tokens: (parsed.inputTokens || 0) + (parsed.outputTokens || 0),
                       },
-                    }));
+                    };
+
+                    if (parsed.toolCalls.length > 0) {
+                      openaiResponse.choices[0].message.tool_calls = parsed.toolCalls.map((tc) => ({
+                        id: tc.toolUseId,
+                        type: 'function',
+                        function: {
+                          name: tc.name,
+                          arguments: typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input),
+                        },
+                      }));
+                    }
+
+                    return new Response(JSON.stringify(openaiResponse), {
+                      headers: { 'Content-Type': 'application/json' }
+                    });
+                  }
+                }
+
+                const status = response.status;
+                if (status === 401 && retryCount < maxRetries) {
+                  const refreshed = await refreshAccessToken(authDetails);
+                  accountManager.updateFromAuth(account, refreshed);
+                  await accountManager.saveToDisk();
+                  retryCount++;
+                  continue;
+                }
+
+                if (status === 429) {
+                  const retryAfter = parseInt(response.headers.get('retry-after') || '60') * 1000;
+                  const now = Date.now();
+                  const state = rateLimitStateByAccount.get(account.id) || { consecutive429: 0, lastAt: 0 };
+                  
+                  if (now - state.lastAt > RATE_LIMIT_DEDUP_WINDOW_MS) {
+                    state.consecutive429++;
+                    state.lastAt = now;
+                    rateLimitStateByAccount.set(account.id, state);
                   }
 
-                  return new Response(JSON.stringify(openaiResponse), {
-                    headers: { 'Content-Type': 'application/json' }
-                  });
+                  accountManager.markRateLimited(account, retryAfter);
+                  await accountManager.saveToDisk();
+
+                  if (accountCount > 1) {
+                    await showToast(`Rate limited on ${account.email}. Switching account...`, 'warning');
+                    continue;
+                  } else {
+                    const backoff = Math.min(1000 * Math.pow(2, state.consecutive429 - 1), 60000);
+                    await showToast(`Rate limited. Retrying in ${Math.ceil(backoff/1000)}s...`, 'warning');
+                    await sleep(backoff);
+                    continue;
+                  }
                 }
+
+                if ((status === 402 || status === 403) && accountCount > 1) {
+                  accountManager.markUnhealthy(account, status === 402 ? 'Quota exhausted' : 'Forbidden');
+                  await accountManager.saveToDisk();
+                  continue;
+                }
+
+                throw new Error(`Kiro API error: ${status}`);
+
               } catch (error) {
                 if (isNetworkError(error) && retryCount < maxRetries) {
-                  await sleep(config.rate_limit_retry_delay_ms * Math.pow(2, retryCount));
+                  const delay = config.rate_limit_retry_delay_ms * Math.pow(2, retryCount);
+                  await showToast(`Network error. Retrying in ${Math.ceil(delay/1000)}s...`, 'warning');
+                  await sleep(delay);
                   retryCount++;
                   continue;
                 }
                 throw error;
               }
             }
-
-            throw new Error('Max retries exceeded');
           }
         };
       },

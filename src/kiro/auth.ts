@@ -1,41 +1,36 @@
 import type { KiroAuthDetails, RefreshParts } from '../plugin/types';
 import { KIRO_CONSTANTS } from '../constants';
 
-export function parseRefreshParts(refresh: string): RefreshParts {
+export function decodeRefreshToken(refresh: string): RefreshParts {
   const parts = refresh.split('|');
   
   if (parts.length < 2) {
-    throw new Error('Invalid refresh token format');
+    // Fallback for old format or raw tokens
+    return {
+      refreshToken: parts[0]!,
+      authMethod: 'social'
+    };
   }
 
   const refreshToken = parts[0]!;
   const authMethod = parts[parts.length - 1]!;
 
   if (authMethod === 'social') {
-    if (parts.length !== 3) {
-      throw new Error('Invalid social auth refresh token format');
-    }
-    const profileArn = parts[1]!;
     return {
       refreshToken,
-      profileArn,
+      profileArn: parts[1],
       authMethod: 'social',
     };
   } else if (authMethod === 'idc') {
-    if (parts.length !== 4) {
-      throw new Error('Invalid IDC auth refresh token format');
-    }
-    const clientId = parts[1]!;
-    const clientSecret = parts[2]!;
     return {
       refreshToken,
-      clientId,
-      clientSecret,
+      clientId: parts[1],
+      clientSecret: parts[2],
       authMethod: 'idc',
     };
   }
 
-  throw new Error(`Unknown auth method: ${authMethod}`);
+  return { refreshToken, authMethod: authMethod as any };
 }
 
 export function accessTokenExpired(auth: KiroAuthDetails): boolean {

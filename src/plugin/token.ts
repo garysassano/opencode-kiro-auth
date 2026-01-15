@@ -1,6 +1,6 @@
 import type { KiroAuthDetails, KiroAuthMethod, KiroRegion, RefreshParts } from './types';
 import { KiroTokenRefreshError } from './errors';
-import { decodeRefreshToken, encodeRefreshToken } from './accounts';
+import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth';
 
 const SOCIAL_REFRESH_URL_TEMPLATE = 'https://prod.{{region}}.auth.desktop.kiro.dev/refreshToken';
 const IDC_REFRESH_URL_TEMPLATE = 'https://oidc.{{region}}.amazonaws.com/token';

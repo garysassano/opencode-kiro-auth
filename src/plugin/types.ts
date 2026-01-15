@@ -131,7 +131,7 @@ export interface PreparedRequest {
   conversationId: string;
 }
 
-export type AccountSelectionStrategy = 'sticky' | 'round-robin';
+export type AccountSelectionStrategy = 'sticky' | 'round-robin' | 'lowest-usage';
 
 export interface StreamEvent {
   type: string;

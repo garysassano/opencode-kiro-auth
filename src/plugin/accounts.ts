@@ -10,6 +10,7 @@ import type {
 } from './types';
 import * as logger from './logger';
 import { KIRO_CONSTANTS } from '../constants';
+import { encodeRefreshToken, decodeRefreshToken, accessTokenExpired } from '../kiro/auth';
 
 export function generateAccountId(): string {
   return randomBytes(16).toString('hex');
@@ -19,9 +20,6 @@ export function isAccountAvailable(account: ManagedAccount): boolean {
   const now = Date.now();
   
   if (!account.isHealthy) {
-    if (account.recoveryTime && now < account.recoveryTime) {
-      return false;
-    }
     if (account.recoveryTime && now >= account.recoveryTime) {
       return true;
     }
@@ -35,59 +33,12 @@ export function isAccountAvailable(account: ManagedAccount): boolean {
   return true;
 }
 
-export function encodeRefreshToken(parts: RefreshParts): string {
-  const segments: string[] = [parts.refreshToken];
-  
-  if (parts.profileArn) {
-    segments.push(`profileArn:${parts.profileArn}`);
-  }
-  if (parts.clientId) {
-    segments.push(`clientId:${parts.clientId}`);
-  }
-  if (parts.clientSecret) {
-    segments.push(`clientSecret:${parts.clientSecret}`);
-  }
-  if (parts.authMethod) {
-    segments.push(`authMethod:${parts.authMethod}`);
-  }
-  
-  return segments.join('|');
-}
-
-export function decodeRefreshToken(encoded: string): RefreshParts {
-  const segments = encoded.split('|');
-  const parts: RefreshParts = {
-    refreshToken: segments[0] || '',
-  };
-  
-  for (let i = 1; i < segments.length; i++) {
-    const segment = segments[i];
-    if (!segment) continue;
-    
-    const colonIndex = segment.indexOf(':');
-    if (colonIndex === -1) continue;
-    
-    const key = segment.substring(0, colonIndex);
-    const value = segment.substring(colonIndex + 1);
-    
-    if (key === 'profileArn') {
-      parts.profileArn = value;
-    } else if (key === 'clientId') {
-      parts.clientId = value;
-    } else if (key === 'clientSecret') {
-      parts.clientSecret = value;
-    } else if (key === 'authMethod') {
-      parts.authMethod = value as 'social' | 'idc';
-    }
-  }
-  
-  return parts;
-}
-
 export class AccountManager {
   private accounts: ManagedAccount[];
   private cursor: number;
   private strategy: AccountSelectionStrategy;
+  private lastToastAccountIndex = -1;
+  private lastToastTime = 0;
 
   constructor(accounts: ManagedAccount[], strategy: AccountSelectionStrategy = 'sticky') {
     this.accounts = accounts;
@@ -119,6 +70,32 @@ export class AccountManager {
     return new AccountManager(accounts, strategy || 'sticky');
   }
 
+  getAccountCount(): number {
+    return this.accounts.length;
+  }
+
+  shouldShowAccountToast(accountIndex: number, debounceMs = 30000): boolean {
+    const now = Date.now();
+    if (accountIndex === this.lastToastAccountIndex && now - this.lastToastTime < debounceMs) {
+      return false;
+    }
+    return true;
+  }
+
+  markToastShown(accountIndex: number): void {
+    this.lastToastAccountIndex = accountIndex;
+    this.lastToastTime = Date.now();
+  }
+
+  getMinWaitTime(): number {
+    const now = Date.now();
+    const waitTimes = this.accounts
+      .map(a => (a.rateLimitResetTime || 0) - now)
+      .filter(t => t > 0);
+    
+    return waitTimes.length > 0 ? Math.min(...waitTimes) : 0;
+  }
+
   getCurrentOrNext(): ManagedAccount | null {
     const now = Date.now();
     
@@ -148,6 +125,7 @@ export class AccountManager {
       const currentAccount = this.accounts[this.cursor];
       if (currentAccount && isAccountAvailable(currentAccount)) {
         currentAccount.lastUsed = now;
+        currentAccount.usedCount = (currentAccount.usedCount || 0) + 1;
         return currentAccount;
       }
       
@@ -155,6 +133,7 @@ export class AccountManager {
       if (nextAvailable) {
         this.cursor = this.accounts.indexOf(nextAvailable);
         nextAvailable.lastUsed = now;
+        nextAvailable.usedCount = (nextAvailable.usedCount || 0) + 1;
         return nextAvailable;
       }
       
@@ -166,7 +145,29 @@ export class AccountManager {
       if (account) {
         this.cursor = (this.cursor + 1) % availableAccounts.length;
         account.lastUsed = now;
+        account.usedCount = (account.usedCount || 0) + 1;
         return account;
+      }
+      return null;
+    }
+    
+    if (this.strategy === 'lowest-usage') {
+      const sorted = [...availableAccounts].sort((a, b) => {
+        const usageA = a.usedCount || 0;
+        const usageB = b.usedCount || 0;
+        if (usageA !== usageB) return usageA - usageB;
+        
+        const lastA = a.lastUsed || 0;
+        const lastB = b.lastUsed || 0;
+        return lastA - lastB;
+      });
+      
+      const selected = sorted[0];
+      if (selected) {
+        selected.lastUsed = now;
+        selected.usedCount = (selected.usedCount || 0) + 1;
+        this.cursor = this.accounts.indexOf(selected);
+        return selected;
       }
       return null;
     }

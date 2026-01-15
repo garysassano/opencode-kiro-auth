@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const AccountSelectionStrategySchema = z.enum(['sticky', 'round-robin']);
+export const AccountSelectionStrategySchema = z.enum(['sticky', 'round-robin', 'lowest-usage']);
 export type AccountSelectionStrategy = z.infer<typeof AccountSelectionStrategySchema>;
 
 export const RegionSchema = z.enum(['us-east-1', 'us-west-2']);
@@ -25,7 +25,7 @@ export const KiroConfigSchema = z.object({
   
   token_refresh_buffer_seconds: z.number().min(60).max(1800).default(600),
   
-  account_selection_strategy: AccountSelectionStrategySchema.default('sticky'),
+  account_selection_strategy: AccountSelectionStrategySchema.default('lowest-usage'),
   
   thinking_enabled: z.boolean().default(false),
   
@@ -57,7 +57,7 @@ export const DEFAULT_CONFIG: KiroConfig = {
   proactive_token_refresh: true,
   token_refresh_interval_seconds: 300,
   token_refresh_buffer_seconds: 600,
-  account_selection_strategy: 'sticky',
+  account_selection_strategy: 'lowest-usage',
   thinking_enabled: false,
   thinking_budget_tokens: 20000,
   default_region: 'us-east-1',
