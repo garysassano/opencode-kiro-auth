@@ -1,5 +1,38 @@
 import type { KiroRegion } from './plugin/types';
 
+const VALID_REGIONS: readonly KiroRegion[] = ['us-east-1', 'us-west-2'];
+
+export function isValidRegion(region: string): region is KiroRegion {
+  return VALID_REGIONS.includes(region as KiroRegion);
+}
+
+export function normalizeRegion(region: string | undefined): KiroRegion {
+  if (!region || !isValidRegion(region)) {
+    return 'us-east-1';
+  }
+  return region;
+}
+
+export function buildUrl(template: string, region: KiroRegion): string {
+  const url = template.replace('{{region}}', region);
+  
+  try {
+    new URL(url);
+    return url;
+  } catch {
+    throw new Error(`Invalid URL generated: ${url}`);
+  }
+}
+
+export function validateUrl(url: string): boolean {
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const KIRO_CONSTANTS = {
   REFRESH_URL: 'https://prod.{{region}}.auth.desktop.kiro.dev/refreshToken',
   REFRESH_IDC_URL: 'https://oidc.{{region}}.amazonaws.com/token',

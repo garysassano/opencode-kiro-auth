@@ -11,9 +11,8 @@ import { transformKiroStream } from './plugin/streaming';
 import { fetchUsageLimits, calculateRecoveryTime } from './plugin/usage';
 import { updateAccountQuota } from './plugin/quota';
 import { authorizeKiroSocial, exchangeKiroSocial } from './kiro/oauth-social';
-import { authorizeKiroIDC, exchangeKiroIDC } from './kiro/oauth-idc';
-import { startCallbackServer } from './plugin/server';
-import { promptAuthMethod, promptRegion, displayAuthUrl } from './plugin/cli';
+import { authorizeKiroIDC } from './kiro/oauth-idc';
+import { startIDCAuthServer, startSocialAuthServer } from './plugin/server';
 import { KiroTokenRefreshError } from './plugin/errors';
 import type { ManagedAccount, KiroAuthDetails } from './plugin/types';
 import { KIRO_CONSTANTS } from './constants';
@@ -258,32 +257,49 @@ export const createKiroPlugin = (providerId: string) => async (
           name: 'Google OAuth (Social)',
           type: 'oauth',
           authorize: async () => {
-            const region = await promptRegion();
-            const { url: callbackUrl, waitForCallback } = await startCallbackServer();
-            const auth = await authorizeKiroSocial(region);
-            displayAuthUrl(auth.url);
-            const { code, state } = await waitForCallback();
-            const result = await exchangeKiroSocial(code, state);
-
-            const accountManager = await AccountManager.loadFromDisk();
-
-            const account: ManagedAccount = {
-              id: generateAccountId(),
-              email: result.email,
-              authMethod: 'social',
-              region: result.region,
-              profileArn: result.profileArn,
-              refreshToken: result.refreshToken,
-              accessToken: result.accessToken,
-              expiresAt: result.expiresAt,
-              rateLimitResetTime: 0,
-              isHealthy: true,
-            };
-
-            accountManager.addAccount(account);
-            await accountManager.saveToDisk();
-
-            return accountManager.toAuthDetails(account);
+            return new Promise(async (resolve) => {
+              const region = config.default_region;
+              
+              const auth = await authorizeKiroSocial(region);
+              
+              const { url: callbackUrl, waitForCallback } = await startSocialAuthServer();
+              
+              resolve({
+                url: auth.url,
+                instructions: 'Opening browser for Google OAuth authentication...',
+                method: 'auto',
+                callback: async () => {
+                  try {
+                    const { code, state } = await waitForCallback();
+                    const result = await exchangeKiroSocial(code, state);
+                    
+                    const accountManager = await AccountManager.loadFromDisk(
+                      config.account_selection_strategy
+                    );
+                    
+                    const account: ManagedAccount = {
+                      id: generateAccountId(),
+                      email: result.email,
+                      authMethod: 'social',
+                      region,
+                      profileArn: result.profileArn,
+                      refreshToken: result.refreshToken,
+                      accessToken: result.accessToken,
+                      expiresAt: result.expiresAt,
+                      rateLimitResetTime: 0,
+                      isHealthy: true,
+                    };
+                    
+                    accountManager.addAccount(account);
+                    await accountManager.saveToDisk();
+                    
+                    return { type: 'success', key: result.accessToken };
+                  } catch (error) {
+                    return { type: 'failed' };
+                  }
+                }
+              });
+            });
           }
         },
         {
@@ -291,33 +307,49 @@ export const createKiroPlugin = (providerId: string) => async (
           name: 'AWS Builder ID (IDC)',
           type: 'oauth',
           authorize: async () => {
-            const region = await promptRegion();
-            const { url: callbackUrl, waitForCallback } = await startCallbackServer();
-            const auth = await authorizeKiroIDC(region);
-            displayAuthUrl(auth.url);
-            const { code, state } = await waitForCallback();
-            const result = await exchangeKiroIDC(code, state);
-
-            const accountManager = await AccountManager.loadFromDisk();
-
-            const account: ManagedAccount = {
-              id: generateAccountId(),
-              email: result.email,
-              authMethod: 'idc',
-              region: result.region,
-              clientId: result.clientId,
-              clientSecret: result.clientSecret,
-              refreshToken: result.refreshToken,
-              accessToken: result.accessToken,
-              expiresAt: result.expiresAt,
-              rateLimitResetTime: 0,
-              isHealthy: true,
-            };
-
-            accountManager.addAccount(account);
-            await accountManager.saveToDisk();
-
-            return accountManager.toAuthDetails(account);
+            return new Promise(async (resolve) => {
+              const region = config.default_region;
+              
+              const authData = await authorizeKiroIDC(region);
+              
+              const { url, waitForAuth } = await startIDCAuthServer(authData);
+              
+              resolve({
+                url,
+                instructions: 'Opening browser for AWS Builder ID authentication...',
+                method: 'auto',
+                callback: async () => {
+                  try {
+                    const result = await waitForAuth();
+                    
+                    const accountManager = await AccountManager.loadFromDisk(
+                      config.account_selection_strategy
+                    );
+                    
+                    const account: ManagedAccount = {
+                      id: generateAccountId(),
+                      email: result.email,
+                      authMethod: 'idc',
+                      region,
+                      clientId: result.clientId,
+                      clientSecret: result.clientSecret,
+                      refreshToken: result.refreshToken,
+                      accessToken: result.accessToken,
+                      expiresAt: result.expiresAt,
+                      rateLimitResetTime: 0,
+                      isHealthy: true,
+                    };
+                    
+                    accountManager.addAccount(account);
+                    await accountManager.saveToDisk();
+                    
+                    return { type: 'success', key: result.accessToken };
+                  } catch (error) {
+                    return { type: 'failed' };
+                  }
+                }
+              });
+            });
           }
         }
       ]

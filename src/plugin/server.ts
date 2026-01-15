@@ -1,9 +1,14 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { parse as parseUrl } from 'node:url';
 import * as logger from './logger';
+import { getIDCAuthHtml, getSuccessHtml, getErrorHtml } from './auth-page';
+import { pollKiroIDCToken } from '../kiro/oauth-idc';
+import type { KiroIDCTokenResult } from '../kiro/oauth-idc';
+import type { KiroRegion } from './types';
 
 const DEFAULT_PORT = 8080;
 const CALLBACK_TIMEOUT = 5 * 60 * 1000;
+const IDC_TIMEOUT = 15 * 60 * 1000;
 
 interface CallbackResult {
   code: string;
@@ -13,6 +18,24 @@ interface CallbackResult {
 interface CallbackServerResult {
   url: string;
   waitForCallback: () => Promise<CallbackResult>;
+}
+
+export interface IDCAuthData {
+  verificationUrl: string;
+  verificationUriComplete: string;
+  userCode: string;
+  deviceCode: string;
+  clientId: string;
+  clientSecret: string;
+  interval: number;
+  expiresIn: number;
+  region: KiroRegion;
+}
+
+export interface AuthStatus {
+  status: 'pending' | 'success' | 'failed' | 'timeout';
+  data?: any;
+  error?: string;
 }
 
 function parseQueryParams(url: string): Record<string, string> {
@@ -42,6 +65,15 @@ function sendHtmlResponse(res: ServerResponse, html: string): void {
     'Content-Length': Buffer.byteLength(html),
   });
   res.end(html);
+}
+
+function sendJsonResponse(res: ServerResponse, data: any): void {
+  const json = JSON.stringify(data);
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(json),
+  });
+  res.end(json);
 }
 
 function sendErrorResponse(res: ServerResponse, statusCode: number, message: string): void {
@@ -140,7 +172,7 @@ function sendSuccessResponse(res: ServerResponse): void {
   sendHtmlResponse(res, html);
 }
 
-export async function startCallbackServer(port: number = DEFAULT_PORT): Promise<CallbackServerResult> {
+export async function startSocialAuthServer(port: number = DEFAULT_PORT): Promise<CallbackServerResult> {
   return new Promise((resolve, reject) => {
     let server: Server | null = null;
     let timeoutId: NodeJS.Timeout | null = null;
@@ -232,6 +264,143 @@ export async function startCallbackServer(port: number = DEFAULT_PORT): Promise<
       resolve({
         url,
         waitForCallback,
+      });
+    });
+  });
+}
+
+export async function startIDCAuthServer(
+  authData: IDCAuthData,
+  port: number = 19847
+): Promise<{
+  url: string;
+  waitForAuth: () => Promise<KiroIDCTokenResult>;
+}> {
+  return new Promise((resolve, reject) => {
+    let server: Server | null = null;
+    let timeoutId: NodeJS.Timeout | null = null;
+    let authResolver: ((result: KiroIDCTokenResult) => void) | null = null;
+    let authRejector: ((error: Error) => void) | null = null;
+    
+    const authStatus: AuthStatus = {
+      status: 'pending',
+    };
+    
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      
+      if (server) {
+        server.close((err) => {
+          if (err) {
+            logger.error('Error closing IDC auth server', err);
+          }
+        });
+        server = null;
+      }
+    };
+    
+    const startPolling = async () => {
+      try {
+        const result = await pollKiroIDCToken(
+          authData.clientId,
+          authData.clientSecret,
+          authData.deviceCode,
+          authData.interval,
+          authData.expiresIn,
+          authData.region
+        );
+        
+        authStatus.status = 'success';
+        authStatus.data = result;
+        
+        if (authResolver) {
+          authResolver(result);
+        }
+        
+        setTimeout(cleanup, 2000);
+      } catch (error) {
+        authStatus.status = 'failed';
+        authStatus.error = error instanceof Error ? error.message : 'Unknown error';
+        
+        if (authRejector) {
+          authRejector(error instanceof Error ? error : new Error('Authentication failed'));
+        }
+        
+        setTimeout(cleanup, 2000);
+      }
+    };
+    
+    const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
+      const url = req.url || '';
+      
+      if (url === '/' || url.startsWith('/?')) {
+        const html = getIDCAuthHtml(
+          authData.verificationUrl,
+          authData.verificationUriComplete,
+          authData.userCode
+        );
+        sendHtmlResponse(res, html);
+        return;
+      }
+      
+      if (url === '/status') {
+        sendJsonResponse(res, authStatus);
+        return;
+      }
+      
+      if (url === '/success') {
+        const html = getSuccessHtml();
+        sendHtmlResponse(res, html);
+        return;
+      }
+      
+      if (url === '/error') {
+        const html = getErrorHtml(authStatus.error || 'Authentication failed');
+        sendHtmlResponse(res, html);
+        return;
+      }
+      
+      sendErrorResponse(res, 404, 'Not Found');
+    };
+    
+    server = createServer(handleRequest);
+    
+    server.on('error', (error) => {
+      logger.error('IDC auth server error', error);
+      cleanup();
+      reject(error);
+    });
+    
+    server.listen(port, 'localhost', () => {
+      const url = `http://localhost:${port}`;
+      logger.log('IDC auth server started', { url });
+      
+      timeoutId = setTimeout(() => {
+        logger.warn('IDC auth server timeout');
+        authStatus.status = 'timeout';
+        authStatus.error = 'Authentication timeout';
+        
+        if (authRejector) {
+          authRejector(new Error('Authentication timeout'));
+        }
+        cleanup();
+      }, IDC_TIMEOUT);
+      
+      startPolling();
+      
+      const waitForAuth = (): Promise<KiroIDCTokenResult> => {
+        return new Promise((resolveAuth, rejectAuth) => {
+          authResolver = resolveAuth;
+          authRejector = rejectAuth;
+        });
+      };
+      
+      resolve({
+        url,
+        waitForAuth,
       });
     });
   });
