@@ -26,78 +26,87 @@ export interface KiroIDCTokenResult {
 
 export async function authorizeKiroIDC(region?: KiroRegion): Promise<KiroIDCAuthorization> {
   const effectiveRegion = normalizeRegion(region)
-
   const ssoOIDCEndpoint = buildUrl(KIRO_AUTH_SERVICE.SSO_OIDC_ENDPOINT, effectiveRegion)
 
-  const registerResponse = await fetch(`${ssoOIDCEndpoint}/client/register`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': KIRO_CONSTANTS.USER_AGENT
-    },
-    body: JSON.stringify({
-      clientName: 'Kiro IDE',
-      clientType: 'public',
-      scopes: KIRO_AUTH_SERVICE.SCOPES,
-      grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token']
+  try {
+    const registerResponse = await fetch(`${ssoOIDCEndpoint}/client/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': KIRO_CONSTANTS.USER_AGENT
+      },
+      body: JSON.stringify({
+        clientName: 'Kiro IDE',
+        clientType: 'public',
+        scopes: KIRO_AUTH_SERVICE.SCOPES,
+        grantTypes: ['urn:ietf:params:oauth:grant-type:device_code', 'refresh_token']
+      })
     })
-  })
 
-  if (!registerResponse.ok) {
-    const errorText = await registerResponse.text().catch(() => '')
-    throw new Error(`Client registration failed: ${registerResponse.status} ${errorText}`)
-  }
+    if (!registerResponse.ok) {
+      const errorText = await registerResponse.text().catch(() => '')
+      const error = new Error(`Client registration failed: ${registerResponse.status} ${errorText}`)
+      throw error
+    }
 
-  const registerData = await registerResponse.json()
-  const { clientId, clientSecret } = registerData
+    const registerData = await registerResponse.json()
+    const { clientId, clientSecret } = registerData
 
-  if (!clientId || !clientSecret) {
-    throw new Error('Client registration response missing clientId or clientSecret')
-  }
+    if (!clientId || !clientSecret) {
+      const error = new Error('Client registration response missing clientId or clientSecret')
+      throw error
+    }
 
-  const deviceAuthResponse = await fetch(`${ssoOIDCEndpoint}/device_authorization`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': KIRO_CONSTANTS.USER_AGENT
-    },
-    body: JSON.stringify({
+    const deviceAuthResponse = await fetch(`${ssoOIDCEndpoint}/device_authorization`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': KIRO_CONSTANTS.USER_AGENT
+      },
+      body: JSON.stringify({
+        clientId,
+        clientSecret,
+        startUrl: KIRO_AUTH_SERVICE.BUILDER_ID_START_URL
+      })
+    })
+
+    if (!deviceAuthResponse.ok) {
+      const errorText = await deviceAuthResponse.text().catch(() => '')
+      const error = new Error(
+        `Device authorization failed: ${deviceAuthResponse.status} ${errorText}`
+      )
+      throw error
+    }
+
+    const deviceAuthData = await deviceAuthResponse.json()
+
+    const {
+      verificationUri,
+      verificationUriComplete,
+      userCode,
+      deviceCode,
+      interval = 5,
+      expiresIn = 600
+    } = deviceAuthData
+
+    if (!deviceCode || !userCode || !verificationUri || !verificationUriComplete) {
+      const error = new Error('Device authorization response missing required fields')
+      throw error
+    }
+
+    return {
+      verificationUrl: verificationUri,
+      verificationUriComplete,
+      userCode,
+      deviceCode,
       clientId,
       clientSecret,
-      startUrl: KIRO_AUTH_SERVICE.BUILDER_ID_START_URL
-    })
-  })
-
-  if (!deviceAuthResponse.ok) {
-    const errorText = await deviceAuthResponse.text().catch(() => '')
-    throw new Error(`Device authorization failed: ${deviceAuthResponse.status} ${errorText}`)
-  }
-
-  const deviceAuthData = await deviceAuthResponse.json()
-
-  const {
-    verificationUri,
-    verificationUriComplete,
-    userCode,
-    deviceCode,
-    interval = 5,
-    expiresIn = 600
-  } = deviceAuthData
-
-  if (!deviceCode || !userCode || !verificationUri || !verificationUriComplete) {
-    throw new Error('Device authorization response missing required fields')
-  }
-
-  return {
-    verificationUrl: verificationUri,
-    verificationUriComplete,
-    userCode,
-    deviceCode,
-    clientId,
-    clientSecret,
-    interval,
-    expiresIn,
-    region: effectiveRegion
+      interval,
+      expiresIn,
+      region: effectiveRegion
+    }
+  } catch (error) {
+    throw error
   }
 }
 
@@ -110,7 +119,8 @@ export async function pollKiroIDCToken(
   region: KiroRegion
 ): Promise<KiroIDCTokenResult> {
   if (!clientId || !clientSecret || !deviceCode) {
-    throw new Error('Missing required parameters for token polling')
+    const error = new Error('Missing required parameters for token polling')
+    throw error
   }
 
   const effectiveRegion = normalizeRegion(region)
@@ -155,14 +165,21 @@ export async function pollKiroIDCToken(
         }
 
         if (errorType === 'expired_token') {
-          throw new Error('Device code has expired. Please restart the authorization process.')
+          const error = new Error(
+            'Device code has expired. Please restart the authorization process.'
+          )
+          throw error
         }
 
         if (errorType === 'access_denied') {
-          throw new Error('Authorization was denied by the user.')
+          const error = new Error('Authorization was denied by the user.')
+          throw error
         }
 
-        throw new Error(`Token polling failed: ${errorType} - ${tokenData.error_description || ''}`)
+        const error = new Error(
+          `Token polling failed: ${errorType} - ${tokenData.error_description || ''}`
+        )
+        throw error
       }
 
       if (tokenData.accessToken && tokenData.refreshToken) {
@@ -182,7 +199,8 @@ export async function pollKiroIDCToken(
       }
 
       if (!tokenResponse.ok) {
-        throw new Error(`Token request failed with status: ${tokenResponse.status}`)
+        const error = new Error(`Token request failed with status: ${tokenResponse.status}`)
+        throw error
       }
     } catch (error) {
       if (
@@ -195,12 +213,14 @@ export async function pollKiroIDCToken(
       }
 
       if (attempts >= maxAttempts) {
-        throw new Error(
+        const finalError = new Error(
           `Token polling failed after ${attempts} attempts: ${error instanceof Error ? error.message : 'Unknown error'}`
         )
+        throw finalError
       }
     }
   }
 
-  throw new Error('Token polling timed out. Authorization may have expired.')
+  const timeoutError = new Error('Token polling timed out. Authorization may have expired.')
+  throw timeoutError
 }

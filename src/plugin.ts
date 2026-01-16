@@ -289,65 +289,77 @@ export const createKiroPlugin =
             authorize: async () =>
               new Promise(async (resolve) => {
                 const region = config.default_region
-                const authData = await authorizeKiroIDC(region)
-                const { url, waitForAuth } = await startIDCAuthServer(authData)
-                resolve({
-                  url,
-                  instructions: 'Opening browser...',
-                  method: 'auto',
-                  callback: async () => {
-                    try {
-                      const res = await waitForAuth()
-                      const am = await AccountManager.loadFromDisk(
-                        config.account_selection_strategy
-                      )
-                      const acc: ManagedAccount = {
-                        id: generateAccountId(),
-                        email: res.email,
-                        authMethod: 'idc',
-                        region,
-                        clientId: res.clientId,
-                        clientSecret: res.clientSecret,
-                        refreshToken: res.refreshToken,
-                        accessToken: res.accessToken,
-                        expiresAt: res.expiresAt,
-                        rateLimitResetTime: 0,
-                        isHealthy: true
-                      }
+                try {
+                  const authData = await authorizeKiroIDC(region)
+                  const { url, waitForAuth } = await startIDCAuthServer(authData)
+                  resolve({
+                    url,
+                    instructions: 'Opening browser...',
+                    method: 'auto',
+                    callback: async () => {
                       try {
-                        const u = await fetchUsageLimits({
-                          refresh: encodeRefreshToken({
-                            refreshToken: res.refreshToken,
-                            clientId: res.clientId,
-                            clientSecret: res.clientSecret,
-                            authMethod: 'idc'
-                          }),
-                          access: res.accessToken,
-                          expires: res.expiresAt,
+                        const res = await waitForAuth()
+                        const am = await AccountManager.loadFromDisk(
+                          config.account_selection_strategy
+                        )
+                        const acc: ManagedAccount = {
+                          id: generateAccountId(),
+                          email: res.email,
                           authMethod: 'idc',
                           region,
                           clientId: res.clientId,
                           clientSecret: res.clientSecret,
-                          email: res.email
-                        })
-                        am.updateUsage(acc.id, {
-                          usedCount: u.usedCount,
-                          limitCount: u.limitCount,
-                          realEmail: u.email
-                        })
+                          refreshToken: res.refreshToken,
+                          accessToken: res.accessToken,
+                          expiresAt: res.expiresAt,
+                          rateLimitResetTime: 0,
+                          isHealthy: true
+                        }
+                        try {
+                          const u = await fetchUsageLimits({
+                            refresh: encodeRefreshToken({
+                              refreshToken: res.refreshToken,
+                              clientId: res.clientId,
+                              clientSecret: res.clientSecret,
+                              authMethod: 'idc'
+                            }),
+                            access: res.accessToken,
+                            expires: res.expiresAt,
+                            authMethod: 'idc',
+                            region,
+                            clientId: res.clientId,
+                            clientSecret: res.clientSecret,
+                            email: res.email
+                          })
+                          am.updateUsage(acc.id, {
+                            usedCount: u.usedCount,
+                            limitCount: u.limitCount,
+                            realEmail: u.email
+                          })
+                        } catch (e: any) {
+                          logger.warn(`Initial usage fetch failed: ${e.message}`, e)
+                        }
+                        am.addAccount(acc)
+                        await am.saveToDisk()
+                        showToast(`Successfully logged in as ${res.email}`, 'success')
+                        return { type: 'success', key: res.accessToken }
                       } catch (e: any) {
-                        logger.warn(`Initial usage fetch failed: ${e.message}`)
+                        logger.error(`Login failed: ${e.message}`, e)
+                        showToast(`Login failed: ${e.message}`, 'error')
+                        return { type: 'failed' }
                       }
-                      am.addAccount(acc)
-                      await am.saveToDisk()
-                      showToast(`Successfully logged in as ${res.email}`, 'success')
-                      return { type: 'success', key: res.accessToken }
-                    } catch (e: any) {
-                      logger.error(`Login failed: ${e.message}`)
-                      return { type: 'failed' }
                     }
-                  }
-                })
+                  })
+                } catch (e: any) {
+                  logger.error(`Authorization failed: ${e.message}`, e)
+                  showToast(`Authorization failed: ${e.message}`, 'error')
+                  resolve({
+                    url: '',
+                    instructions: 'Authorization failed',
+                    method: 'auto',
+                    callback: async () => ({ type: 'failed' })
+                  })
+                }
               })
           }
         ]

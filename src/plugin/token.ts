@@ -5,8 +5,10 @@ import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth'
 export async function refreshAccessToken(auth: KiroAuthDetails): Promise<KiroAuthDetails> {
   const url = `https://oidc.${auth.region}.amazonaws.com/token`
   const p = decodeRefreshToken(auth.refresh)
-  if (!p.clientId || !p.clientSecret)
+
+  if (!p.clientId || !p.clientSecret) {
     throw new KiroTokenRefreshError('Missing creds', 'MISSING_CREDENTIALS')
+  }
 
   const requestBody = {
     refreshToken: p.refreshToken,
@@ -15,51 +17,65 @@ export async function refreshAccessToken(auth: KiroAuthDetails): Promise<KiroAut
     grantType: 'refresh_token'
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'amz-sdk-request': 'attempt=1; max=1',
-      'x-amzn-kiro-agent-mode': 'vibe',
-      Connection: 'close'
-    },
-    body: JSON.stringify(requestBody)
-  })
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'amz-sdk-request': 'attempt=1; max=1',
+        'x-amzn-kiro-agent-mode': 'vibe',
+        Connection: 'close'
+      },
+      body: JSON.stringify(requestBody)
+    })
 
-  if (!res.ok) {
-    const txt = await res.text()
-    let data: any = {}
-    try {
-      data = JSON.parse(txt)
-    } catch {
-      data = { message: txt }
+    if (!res.ok) {
+      const txt = await res.text()
+      let data: any = {}
+      try {
+        data = JSON.parse(txt)
+      } catch {
+        data = { message: txt }
+      }
+      throw new KiroTokenRefreshError(
+        `Refresh failed: ${data.message || data.error_description || txt}`,
+        data.error || `HTTP_${res.status}`
+      )
+    }
+
+    const d = await res.json()
+    const acc = d.access_token || d.accessToken
+
+    if (!acc) {
+      throw new KiroTokenRefreshError('No access token', 'INVALID_RESPONSE')
+    }
+
+    const upP: RefreshParts = {
+      refreshToken: d.refresh_token || d.refreshToken || p.refreshToken,
+      clientId: p.clientId,
+      clientSecret: p.clientSecret,
+      authMethod: 'idc'
+    }
+
+    return {
+      refresh: encodeRefreshToken(upP),
+      access: acc,
+      expires: Date.now() + (d.expires_in || 3600) * 1000,
+      authMethod: 'idc',
+      region: auth.region,
+      clientId: auth.clientId,
+      clientSecret: auth.clientSecret,
+      email: auth.email
+    }
+  } catch (error) {
+    if (error instanceof KiroTokenRefreshError) {
+      throw error
     }
     throw new KiroTokenRefreshError(
-      `Refresh failed: ${data.message || data.error_description || txt}`,
-      data.error || `HTTP_${res.status}`
+      `Token refresh failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'NETWORK_ERROR',
+      error instanceof Error ? error : undefined
     )
-  }
-
-  const d = await res.json()
-  const acc = d.access_token || d.accessToken
-  if (!acc) throw new KiroTokenRefreshError('No access token', 'INVALID_RESPONSE')
-
-  const upP: RefreshParts = {
-    refreshToken: d.refresh_token || d.refreshToken || p.refreshToken,
-    clientId: p.clientId,
-    clientSecret: p.clientSecret,
-    authMethod: 'idc'
-  }
-
-  return {
-    refresh: encodeRefreshToken(upP),
-    access: acc,
-    expires: Date.now() + (d.expires_in || 3600) * 1000,
-    authMethod: 'idc',
-    region: auth.region,
-    clientId: auth.clientId,
-    clientSecret: auth.clientSecret,
-    email: auth.email
   }
 }

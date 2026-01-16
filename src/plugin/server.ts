@@ -77,16 +77,19 @@ export function startIDCAuthServer(
               clientSecret: authData.clientSecret
             })
           setTimeout(cleanup, 2000)
-        } else if (d.error === 'authorization_pending') setTimeout(poll, authData.interval * 1000)
-        else {
+        } else if (d.error === 'authorization_pending') {
+          setTimeout(poll, authData.interval * 1000)
+        } else {
           status.status = 'failed'
           status.error = d.error_description || d.error
+          logger.error(`Auth polling failed: ${status.error}`)
           if (rejector) rejector(new Error(status.error))
           setTimeout(cleanup, 2000)
         }
       } catch (e: any) {
         status.status = 'failed'
         status.error = e.message
+        logger.error(`Auth polling error: ${e.message}`, e)
         if (rejector) rejector(e)
         setTimeout(cleanup, 2000)
       }
@@ -115,12 +118,14 @@ export function startIDCAuthServer(
     })
 
     server.on('error', (e) => {
+      logger.error(`Auth server error on port ${port}`, e)
       cleanup()
       reject(e)
     })
     server.listen(port, '127.0.0.1', () => {
       timeoutId = setTimeout(() => {
         status.status = 'timeout'
+        logger.warn('Auth timeout waiting for authorization')
         if (rejector) rejector(new Error('Timeout'))
         cleanup()
       }, 900000)
