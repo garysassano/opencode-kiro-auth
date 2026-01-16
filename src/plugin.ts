@@ -91,9 +91,9 @@ export const createKiroPlugin =
                 }
 
                 const prep = transformToCodeWhisperer(url, init?.body, model, auth, think, budget)
-                
+
                 const apiTimestamp = config.enable_log_api_request ? logger.getTimestamp() : null
-                
+
                 if (config.enable_log_api_request && apiTimestamp) {
                   let parsedBody: any = null
                   if (prep.init.body && typeof prep.init.body === 'string') {
@@ -103,7 +103,7 @@ export const createKiroPlugin =
                       parsedBody = prep.init.body
                     }
                   }
-                  
+
                   logger.logApiRequest(
                     {
                       url: prep.url,
@@ -116,16 +116,16 @@ export const createKiroPlugin =
                     apiTimestamp
                   )
                 }
-                
+
                 try {
                   const res = await fetch(prep.url, prep.init)
-                  
+
                   if (config.enable_log_api_request && apiTimestamp) {
                     const responseHeaders: Record<string, string> = {}
                     res.headers.forEach((value, key) => {
                       responseHeaders[key] = value
                     })
-                    
+
                     logger.logApiResponse(
                       {
                         status: res.status,
@@ -137,7 +137,7 @@ export const createKiroPlugin =
                       apiTimestamp
                     )
                   }
-                  
+
                   if (res.ok) {
                     if (config.usage_tracking_enabled)
                       fetchUsageLimits(auth)
@@ -232,13 +232,13 @@ export const createKiroPlugin =
                     await am.saveToDisk()
                     continue
                   }
-                  
+
                   if (config.enable_log_api_request && apiTimestamp) {
                     const responseHeaders: Record<string, string> = {}
                     res.headers.forEach((value, key) => {
                       responseHeaders[key] = value
                     })
-                    
+
                     logger.logApiResponse(
                       {
                         status: res.status,
@@ -251,7 +251,7 @@ export const createKiroPlugin =
                       apiTimestamp
                     )
                   }
-                  
+
                   throw new Error(`Kiro Error: ${res.status}`)
                 } catch (e) {
                   if (config.enable_log_api_request && apiTimestamp) {
@@ -264,7 +264,7 @@ export const createKiroPlugin =
                       apiTimestamp
                     )
                   }
-                  
+
                   if (isNetworkError(e) && retry < config.rate_limit_max_retries) {
                     const delay = 5000 * Math.pow(2, retry)
                     showToast(
