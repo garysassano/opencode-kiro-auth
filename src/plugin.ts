@@ -10,7 +10,9 @@ import { fetchUsageLimits, updateAccountQuota } from './plugin/usage'
 import { authorizeKiroIDC } from './kiro/oauth-idc'
 import { startIDCAuthServer } from './plugin/server'
 import { KiroTokenRefreshError } from './plugin/errors'
+import { promptAddAnotherAccount, promptLoginMode } from './plugin/cli'
 import type { ManagedAccount } from './plugin/types'
+import type { KiroIDCTokenResult } from './kiro/oauth-idc'
 import { KIRO_CONSTANTS } from './constants'
 import * as logger from './plugin/logger'
 
@@ -359,9 +361,170 @@ export const createKiroPlugin =
             id: 'idc',
             label: 'AWS Builder ID (IDC)',
             type: 'oauth',
-            authorize: async () =>
+            authorize: async (inputs?: any) =>
               new Promise(async (resolve) => {
                 const region = config.default_region
+
+                if (inputs) {
+                  const accounts: KiroIDCTokenResult[] = []
+                  let startFresh = true
+
+                  const existingAm = await AccountManager.loadFromDisk(
+                    config.account_selection_strategy
+                  )
+                  if (existingAm.getAccountCount() > 0) {
+                    const existingAccounts = existingAm.getAccounts().map((acc, idx) => ({
+                      email: acc.realEmail || acc.email,
+                      index: idx
+                    }))
+
+                    const loginMode = await promptLoginMode(existingAccounts)
+                    startFresh = loginMode === 'fresh'
+
+                    console.log(
+                      startFresh
+                        ? '\nStarting fresh - existing accounts will be replaced.\n'
+                        : '\nAdding to existing accounts.\n'
+                    )
+                  }
+
+                  while (true) {
+                    console.log(`\n=== Kiro IDC Auth (Account ${accounts.length + 1}) ===\n`)
+
+                    const result = await (async (): Promise<
+                      KiroIDCTokenResult | { type: 'failed'; error: string }
+                    > => {
+                      try {
+                        const authData = await authorizeKiroIDC(region)
+                        const { url, waitForAuth } = await startIDCAuthServer(
+                          authData,
+                          config.auth_server_port_start,
+                          config.auth_server_port_range
+                        )
+
+                        console.log('OAuth URL:\n' + url + '\n')
+                        openBrowser(url)
+
+                        const res = await waitForAuth()
+                        return res as KiroIDCTokenResult
+                      } catch (e: any) {
+                        return { type: 'failed' as const, error: e.message }
+                      }
+                    })()
+
+                    if ('type' in result && result.type === 'failed') {
+                      if (accounts.length === 0) {
+                        return resolve({
+                          url: '',
+                          instructions: `Authentication failed: ${result.error}`,
+                          method: 'auto',
+                          callback: async () => ({ type: 'failed' })
+                        })
+                      }
+
+                      console.warn(
+                        `[opencode-kiro-auth] Skipping failed account ${accounts.length + 1}: ${result.error}`
+                      )
+                      break
+                    }
+
+                    const successResult = result as KiroIDCTokenResult
+                    accounts.push(successResult)
+
+                    const isFirstAccount = accounts.length === 1
+                    const am = await AccountManager.loadFromDisk(config.account_selection_strategy)
+
+                    if (isFirstAccount && startFresh) {
+                      am.getAccounts().forEach((acc) => am.removeAccount(acc))
+                    }
+
+                    const acc: ManagedAccount = {
+                      id: generateAccountId(),
+                      email: successResult.email,
+                      authMethod: 'idc',
+                      region,
+                      clientId: successResult.clientId,
+                      clientSecret: successResult.clientSecret,
+                      refreshToken: successResult.refreshToken,
+                      accessToken: successResult.accessToken,
+                      expiresAt: successResult.expiresAt,
+                      rateLimitResetTime: 0,
+                      isHealthy: true
+                    }
+
+                    try {
+                      const u = await fetchUsageLimits({
+                        refresh: encodeRefreshToken({
+                          refreshToken: successResult.refreshToken,
+                          clientId: successResult.clientId,
+                          clientSecret: successResult.clientSecret,
+                          authMethod: 'idc'
+                        }),
+                        access: successResult.accessToken,
+                        expires: successResult.expiresAt,
+                        authMethod: 'idc',
+                        region,
+                        clientId: successResult.clientId,
+                        clientSecret: successResult.clientSecret,
+                        email: successResult.email
+                      })
+                      am.updateUsage(acc.id, {
+                        usedCount: u.usedCount,
+                        limitCount: u.limitCount,
+                        realEmail: u.email
+                      })
+                    } catch (e: any) {
+                      logger.warn(`Initial usage fetch failed: ${e.message}`, e)
+                    }
+
+                    am.addAccount(acc)
+                    await am.saveToDisk()
+
+                    showToast(
+                      `Account ${accounts.length} authenticated${successResult.email ? ` (${successResult.email})` : ''}`,
+                      'success'
+                    )
+
+                    let currentAccountCount = accounts.length
+                    try {
+                      const currentStorage = await AccountManager.loadFromDisk(
+                        config.account_selection_strategy
+                      )
+                      currentAccountCount = currentStorage.getAccountCount()
+                    } catch {}
+
+                    const addAnother = await promptAddAnotherAccount(currentAccountCount)
+                    if (!addAnother) {
+                      break
+                    }
+                  }
+
+                  const primary = accounts[0]
+                  if (!primary) {
+                    return resolve({
+                      url: '',
+                      instructions: 'Authentication cancelled',
+                      method: 'auto',
+                      callback: async () => ({ type: 'failed' })
+                    })
+                  }
+
+                  let actualAccountCount = accounts.length
+                  try {
+                    const finalStorage = await AccountManager.loadFromDisk(
+                      config.account_selection_strategy
+                    )
+                    actualAccountCount = finalStorage.getAccountCount()
+                  } catch {}
+
+                  return resolve({
+                    url: '',
+                    instructions: `Multi-account setup complete (${actualAccountCount} account(s)).`,
+                    method: 'auto',
+                    callback: async () => ({ type: 'success', key: primary.accessToken })
+                  })
+                }
+
                 try {
                   const authData = await authorizeKiroIDC(region)
                   const { url, waitForAuth } = await startIDCAuthServer(
