@@ -12,6 +12,7 @@ import { transformToCodeWhisperer } from './plugin/request'
 import { parseEventStream } from './plugin/response'
 import { startIDCAuthServer } from './plugin/server'
 import { migrateJsonToSqlite } from './plugin/storage/migration'
+import { kiroDb } from './plugin/storage/sqlite'
 import { transformKiroStream } from './plugin/streaming'
 import { syncFromKiroCli } from './plugin/sync/kiro-cli'
 import { refreshAccessToken } from './plugin/token'
@@ -208,6 +209,10 @@ export const createKiroPlugin =
                     )
                   }
                   if (res.ok) {
+                    if (acc.failCount && acc.failCount > 0) {
+                      acc.failCount = 0
+                      kiroDb.upsertAccount(acc)
+                    }
                     if (config.usage_tracking_enabled) {
                       const sync = async (att = 0): Promise<void> => {
                         try {
@@ -302,9 +307,34 @@ export const createKiroPlugin =
                     continue
                   }
                   if ((res.status === 402 || res.status === 403) && count > 1) {
-                    am.markUnhealthy(acc, res.status === 402 ? 'Quota' : 'Forbidden')
-                    await am.saveToDisk()
-                    continue
+                    let errorReason = res.status === 402 ? 'Quota' : 'Forbidden'
+                    let isPermanent = false
+                    let shouldSkipAccount = false
+                    try {
+                      const errorBody = await res.text()
+                      const errorData = JSON.parse(errorBody)
+                      if (errorData.reason === 'TEMPORARILY_SUSPENDED') {
+                        errorReason = 'Account Suspended'
+                        isPermanent = true
+                        shouldSkipAccount = true
+                      } else if (errorData.reason === 'INVALID_MODEL_ID') {
+                        logger.warn(`Invalid model ID for ${acc.email}: ${errorData.message}`)
+                        throw new Error(`Invalid model: ${errorData.message}`)
+                      }
+                    } catch (e) {
+                      if (e instanceof Error && e.message.includes('Invalid model')) {
+                        throw e
+                      }
+                    }
+
+                    if (shouldSkipAccount) {
+                      if (isPermanent) {
+                        acc.failCount = 10
+                      }
+                      am.markUnhealthy(acc, errorReason)
+                      await am.saveToDisk()
+                      continue
+                    }
                   }
                   const h: any = {}
                   res.headers.forEach((v, k) => {

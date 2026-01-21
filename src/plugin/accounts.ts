@@ -84,7 +84,7 @@ export class AccountManager {
     const now = Date.now()
     const available = this.accounts.filter((a) => {
       if (!a.isHealthy) {
-        if (a.failCount < 3 && a.recoveryTime && now >= a.recoveryTime) {
+        if (a.failCount < 10 && a.recoveryTime && now >= a.recoveryTime) {
           a.isHealthy = true
           delete a.unhealthyReason
           delete a.recoveryTime
@@ -109,7 +109,7 @@ export class AccountManager {
     }
     if (!selected) {
       const fallback = this.accounts
-        .filter((a) => !a.isHealthy && a.failCount < 3)
+        .filter((a) => !a.isHealthy && a.failCount < 10)
         .sort(
           (a, b) => (a.usedCount || 0) - (b.usedCount || 0) || (a.lastUsed || 0) - (b.lastUsed || 0)
         )[0]
@@ -182,7 +182,7 @@ export class AccountManager {
       acc.failCount = (acc.failCount || 0) + 1
       acc.unhealthyReason = reason
       acc.lastUsed = Date.now()
-      if (acc.failCount >= 3) {
+      if (acc.failCount >= 10) {
         acc.isHealthy = false
         acc.recoveryTime = recovery || Date.now() + 3600000
       }
