@@ -51,7 +51,8 @@ export function transformToCodeWhisperer(
   model: string,
   auth: KiroAuthDetails,
   think = false,
-  budget = 20000
+  budget = 20000,
+  reductionFactor = 1.0
 ): PreparedRequest {
   const req = typeof body === 'string' ? JSON.parse(body) : body
   const { messages, tools, system } = req
@@ -95,6 +96,7 @@ export function transformToCodeWhisperer(
       })
     }
   }
+  const toolResultLimit = Math.floor(250000 * reductionFactor)
   for (let i = 0; i < msgs.length - 1; i++) {
     const m = msgs[i]
     if (!m) continue
@@ -107,7 +109,7 @@ export function transformToCodeWhisperer(
           if (p.type === 'text') uim.content += p.text || ''
           else if (p.type === 'tool_result')
             trs.push({
-              content: [{ text: truncate(getContentText(p.content || p), 250000) }],
+              content: [{ text: truncate(getContentText(p.content || p), toolResultLimit) }],
               status: 'success',
               toolUseId: p.tool_use_id
             })
@@ -129,13 +131,13 @@ export function transformToCodeWhisperer(
       if (m.tool_results) {
         for (const tr of m.tool_results)
           trs.push({
-            content: [{ text: truncate(getContentText(tr), 250000) }],
+            content: [{ text: truncate(getContentText(tr), toolResultLimit) }],
             status: 'success',
             toolUseId: tr.tool_call_id
           })
       } else {
         trs.push({
-          content: [{ text: truncate(getContentText(m), 250000) }],
+          content: [{ text: truncate(getContentText(m), toolResultLimit) }],
           status: 'success',
           toolUseId: m.tool_call_id
         })
@@ -185,7 +187,8 @@ export function transformToCodeWhisperer(
   }
   history = sanitizeHistory(history)
   let historySize = JSON.stringify(history).length
-  while (historySize > 850000 && history.length > 2) {
+  const historyLimit = Math.floor(850000 * reductionFactor)
+  while (historySize > historyLimit && history.length > 2) {
     history.shift()
     while (history.length > 0) {
       const first = history[0]
@@ -240,13 +243,13 @@ export function transformToCodeWhisperer(
       if (curMsg.tool_results) {
         for (const tr of curMsg.tool_results)
           curTrs.push({
-            content: [{ text: truncate(getContentText(tr), 250000) }],
+            content: [{ text: truncate(getContentText(tr), toolResultLimit) }],
             status: 'success',
             toolUseId: tr.tool_call_id
           })
       } else {
         curTrs.push({
-          content: [{ text: truncate(getContentText(curMsg), 250000) }],
+          content: [{ text: truncate(getContentText(curMsg), toolResultLimit) }],
           status: 'success',
           toolUseId: curMsg.tool_call_id
         })
@@ -256,7 +259,7 @@ export function transformToCodeWhisperer(
         if (p.type === 'text') curContent += p.text || ''
         else if (p.type === 'tool_result')
           curTrs.push({
-            content: [{ text: truncate(getContentText(p.content || p), 250000) }],
+            content: [{ text: truncate(getContentText(p.content || p), toolResultLimit) }],
             status: 'success',
             toolUseId: p.tool_use_id
           })

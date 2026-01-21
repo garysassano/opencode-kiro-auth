@@ -148,209 +148,225 @@ export const createKiroPlugin =
                   }
                 }
 
-                const prep = transformToCodeWhisperer(url, init?.body, model, auth, think, budget)
+                let reductionFactor = 1.0
+                const prepRequest = (factor: number) =>
+                  transformToCodeWhisperer(url, init?.body, model, auth, think, budget, factor)
+                let prep = prepRequest(reductionFactor)
 
                 const apiTimestamp = config.enable_log_api_request ? logger.getTimestamp() : null
+                let lastRequestData: any = null
 
-                let parsedBody: any = null
-                if (prep.init.body && typeof prep.init.body === 'string') {
-                  try {
-                    parsedBody = JSON.parse(prep.init.body)
-                  } catch (e) {
-                    parsedBody = prep.init.body
+                while (true) {
+                  let parsedBody: any = null
+                  if (prep.init.body && typeof prep.init.body === 'string') {
+                    try {
+                      parsedBody = JSON.parse(prep.init.body)
+                    } catch (e) {
+                      parsedBody = prep.init.body
+                    }
                   }
-                }
 
-                const requestData = {
-                  url: prep.url,
-                  method: prep.init.method,
-                  headers: prep.init.headers,
-                  body: parsedBody,
-                  conversationId: prep.conversationId,
-                  model: prep.effectiveModel,
-                  email: acc.realEmail || acc.email
-                }
-
-                if (config.enable_log_api_request && apiTimestamp) {
-                  logger.logApiRequest(requestData, apiTimestamp)
-                }
-
-                try {
-                  const res = await fetch(prep.url, prep.init)
+                  lastRequestData = {
+                    url: prep.url,
+                    method: prep.init.method,
+                    headers: prep.init.headers,
+                    body: parsedBody,
+                    conversationId: prep.conversationId,
+                    model: prep.effectiveModel,
+                    email: acc.realEmail || acc.email
+                  }
 
                   if (config.enable_log_api_request && apiTimestamp) {
+                    logger.logApiRequest(lastRequestData, apiTimestamp)
+                  }
+
+                  try {
+                    const res = await fetch(prep.url, prep.init)
+
+                    if (config.enable_log_api_request && apiTimestamp) {
+                      const responseHeaders: Record<string, string> = {}
+                      res.headers.forEach((value, key) => {
+                        responseHeaders[key] = value
+                      })
+
+                      logger.logApiResponse(
+                        {
+                          status: res.status,
+                          statusText: res.statusText,
+                          headers: responseHeaders,
+                          conversationId: prep.conversationId,
+                          model: prep.effectiveModel
+                        },
+                        apiTimestamp
+                      )
+                    }
+
+                    if (res.ok) {
+                      if (config.usage_tracking_enabled) {
+                        const syncUsage = async (attempt = 0): Promise<void> => {
+                          try {
+                            const u = await fetchUsageLimits(auth)
+                            updateAccountQuota(acc, u, am)
+                            await am.saveToDisk()
+                          } catch (e: any) {
+                            if (attempt < config.usage_sync_max_retries) {
+                              const delay = 1000 * Math.pow(2, attempt)
+                              await sleep(delay)
+                              return syncUsage(attempt + 1)
+                            }
+                            logger.warn(
+                              `Usage sync failed for ${acc.realEmail || acc.email} after ${attempt + 1} attempts: ${e.message}`
+                            )
+                          }
+                        }
+                        syncUsage().catch(() => {})
+                      }
+                      if (prep.streaming) {
+                        const s = transformKiroStream(res, model, prep.conversationId)
+                        return new Response(
+                          new ReadableStream({
+                            async start(c) {
+                              try {
+                                for await (const e of s)
+                                  c.enqueue(
+                                    new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)
+                                  )
+                                c.close()
+                              } catch (err) {
+                                c.error(err)
+                              }
+                            }
+                          }),
+                          { headers: { 'Content-Type': 'text/event-stream' } }
+                        )
+                      }
+                      const text = await res.text()
+                      const p = parseEventStream(text)
+                      const oai: any = {
+                        id: prep.conversationId,
+                        object: 'chat.completion',
+                        created: Math.floor(Date.now() / 1000),
+                        model,
+                        choices: [
+                          {
+                            index: 0,
+                            message: { role: 'assistant', content: p.content },
+                            finish_reason: p.stopReason === 'tool_use' ? 'tool_calls' : 'stop'
+                          }
+                        ],
+                        usage: {
+                          prompt_tokens: p.inputTokens || 0,
+                          completion_tokens: p.outputTokens || 0,
+                          total_tokens: (p.inputTokens || 0) + (p.outputTokens || 0)
+                        }
+                      }
+                      if (p.toolCalls.length > 0)
+                        oai.choices[0].message.tool_calls = p.toolCalls.map((tc) => ({
+                          id: tc.toolUseId,
+                          type: 'function',
+                          function: {
+                            name: tc.name,
+                            arguments:
+                              typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input)
+                          }
+                        }))
+                      return new Response(JSON.stringify(oai), {
+                        headers: { 'Content-Type': 'application/json' }
+                      })
+                    }
+
+                    if (res.status === 400 && reductionFactor > 0.4) {
+                      reductionFactor -= 0.2
+                      showToast(
+                        `Context too long. Retrying with ${Math.round(reductionFactor * 100)}% context...`,
+                        'warning'
+                      )
+                      prep = prepRequest(reductionFactor)
+                      continue
+                    }
+
+                    if (res.status === 401 && retry < config.rate_limit_max_retries) {
+                      retry++
+                      break
+                    }
+                    if (res.status === 429) {
+                      const wait = parseInt(res.headers.get('retry-after') || '60') * 1000
+                      am.markRateLimited(acc, wait)
+                      await am.saveToDisk()
+                      if (count > 1) {
+                        showToast(
+                          `Rate limited on ${acc.realEmail || acc.email}. Switching account...`,
+                          'warning'
+                        )
+                        break
+                      } else {
+                        showToast(
+                          `Rate limited. Retrying in ${Math.ceil(wait / 1000)}s...`,
+                          'warning'
+                        )
+                        await sleep(wait)
+                        break
+                      }
+                    }
+                    if ((res.status === 402 || res.status === 403) && count > 1) {
+                      showToast(
+                        `${res.status === 402 ? 'Quota exhausted' : 'Forbidden'} on ${acc.realEmail || acc.email}. Switching...`,
+                        'warning'
+                      )
+                      am.markUnhealthy(acc, res.status === 402 ? 'Quota' : 'Forbidden')
+                      await am.saveToDisk()
+                      break
+                    }
+
                     const responseHeaders: Record<string, string> = {}
                     res.headers.forEach((value, key) => {
                       responseHeaders[key] = value
                     })
 
-                    logger.logApiResponse(
-                      {
-                        status: res.status,
-                        statusText: res.statusText,
-                        headers: responseHeaders,
-                        conversationId: prep.conversationId,
-                        model: prep.effectiveModel
-                      },
-                      apiTimestamp
-                    )
-                  }
+                    const responseData = {
+                      status: res.status,
+                      statusText: res.statusText,
+                      headers: responseHeaders,
+                      error: `Kiro Error: ${res.status}`,
+                      conversationId: prep.conversationId,
+                      model: prep.effectiveModel
+                    }
 
-                  if (res.ok) {
-                    if (config.usage_tracking_enabled) {
-                      const syncUsage = async (attempt = 0): Promise<void> => {
-                        try {
-                          const u = await fetchUsageLimits(auth)
-                          updateAccountQuota(acc, u, am)
-                          await am.saveToDisk()
-                        } catch (e: any) {
-                          if (attempt < config.usage_sync_max_retries) {
-                            const delay = 1000 * Math.pow(2, attempt)
-                            await sleep(delay)
-                            return syncUsage(attempt + 1)
-                          }
-                          logger.warn(
-                            `Usage sync failed for ${acc.realEmail || acc.email} after ${attempt + 1} attempts: ${e.message}`
-                          )
-                        }
-                      }
-                      syncUsage().catch(() => {})
-                    }
-                    if (prep.streaming) {
-                      const s = transformKiroStream(res, model, prep.conversationId)
-                      return new Response(
-                        new ReadableStream({
-                          async start(c) {
-                            try {
-                              for await (const e of s)
-                                c.enqueue(
-                                  new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)
-                                )
-                              c.close()
-                            } catch (err) {
-                              c.error(err)
-                            }
-                          }
-                        }),
-                        { headers: { 'Content-Type': 'text/event-stream' } }
-                      )
-                    }
-                    const text = await res.text()
-                    const p = parseEventStream(text)
-                    const oai: any = {
-                      id: prep.conversationId,
-                      object: 'chat.completion',
-                      created: Math.floor(Date.now() / 1000),
-                      model,
-                      choices: [
-                        {
-                          index: 0,
-                          message: { role: 'assistant', content: p.content },
-                          finish_reason: p.stopReason === 'tool_use' ? 'tool_calls' : 'stop'
-                        }
-                      ],
-                      usage: {
-                        prompt_tokens: p.inputTokens || 0,
-                        completion_tokens: p.outputTokens || 0,
-                        total_tokens: (p.inputTokens || 0) + (p.outputTokens || 0)
-                      }
-                    }
-                    if (p.toolCalls.length > 0)
-                      oai.choices[0].message.tool_calls = p.toolCalls.map((tc) => ({
-                        id: tc.toolUseId,
-                        type: 'function',
-                        function: {
-                          name: tc.name,
-                          arguments:
-                            typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input)
-                        }
-                      }))
-                    return new Response(JSON.stringify(oai), {
-                      headers: { 'Content-Type': 'application/json' }
-                    })
-                  }
-
-                  if (res.status === 401 && retry < config.rate_limit_max_retries) {
-                    retry++
-                    continue
-                  }
-                  if (res.status === 429) {
-                    const wait = parseInt(res.headers.get('retry-after') || '60') * 1000
-                    am.markRateLimited(acc, wait)
-                    await am.saveToDisk()
-                    if (count > 1) {
-                      showToast(
-                        `Rate limited on ${acc.realEmail || acc.email}. Switching account...`,
-                        'warning'
-                      )
-                      continue
+                    if (config.enable_log_api_request && apiTimestamp) {
+                      logger.logApiResponse(responseData, apiTimestamp)
                     } else {
+                      const errorTimestamp = logger.getTimestamp()
+                      logger.logApiError(lastRequestData, responseData, errorTimestamp)
+                    }
+
+                    throw new Error(`Kiro Error: ${res.status}`)
+                  } catch (e) {
+                    if (isNetworkError(e) && retry < config.rate_limit_max_retries) {
+                      const delay = 5000 * Math.pow(2, retry)
                       showToast(
-                        `Rate limited. Retrying in ${Math.ceil(wait / 1000)}s...`,
+                        `Network error. Retrying in ${Math.ceil(delay / 1000)}s...`,
                         'warning'
                       )
-                      await sleep(wait)
-                      continue
+                      await sleep(delay)
+                      retry++
+                      break
                     }
-                  }
-                  if ((res.status === 402 || res.status === 403) && count > 1) {
-                    showToast(
-                      `${res.status === 402 ? 'Quota exhausted' : 'Forbidden'} on ${acc.realEmail || acc.email}. Switching...`,
-                      'warning'
-                    )
-                    am.markUnhealthy(acc, res.status === 402 ? 'Quota' : 'Forbidden')
-                    await am.saveToDisk()
-                    continue
-                  }
 
-                  const responseHeaders: Record<string, string> = {}
-                  res.headers.forEach((value, key) => {
-                    responseHeaders[key] = value
-                  })
+                    const networkErrorData = {
+                      error: String(e),
+                      conversationId: prep.conversationId,
+                      model: prep.effectiveModel
+                    }
 
-                  const responseData = {
-                    status: res.status,
-                    statusText: res.statusText,
-                    headers: responseHeaders,
-                    error: `Kiro Error: ${res.status}`,
-                    conversationId: prep.conversationId,
-                    model: prep.effectiveModel
+                    if (config.enable_log_api_request && apiTimestamp) {
+                      logger.logApiResponse(networkErrorData, apiTimestamp)
+                    } else {
+                      const errorTimestamp = logger.getTimestamp()
+                      logger.logApiError(lastRequestData, networkErrorData, errorTimestamp)
+                    }
+
+                    throw e
                   }
-
-                  if (config.enable_log_api_request && apiTimestamp) {
-                    logger.logApiResponse(responseData, apiTimestamp)
-                  } else {
-                    const errorTimestamp = logger.getTimestamp()
-                    logger.logApiError(requestData, responseData, errorTimestamp)
-                  }
-
-                  throw new Error(`Kiro Error: ${res.status}`)
-                } catch (e) {
-                  if (isNetworkError(e) && retry < config.rate_limit_max_retries) {
-                    const delay = 5000 * Math.pow(2, retry)
-                    showToast(
-                      `Network error. Retrying in ${Math.ceil(delay / 1000)}s...`,
-                      'warning'
-                    )
-                    await sleep(delay)
-                    retry++
-                    continue
-                  }
-
-                  const networkErrorData = {
-                    error: String(e),
-                    conversationId: prep.conversationId,
-                    model: prep.effectiveModel
-                  }
-
-                  if (config.enable_log_api_request && apiTimestamp) {
-                    logger.logApiResponse(networkErrorData, apiTimestamp)
-                  } else {
-                    const errorTimestamp = logger.getTimestamp()
-                    logger.logApiError(requestData, networkErrorData, errorTimestamp)
-                  }
-
-                  throw e
                 }
               }
             }
