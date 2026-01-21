@@ -40,7 +40,6 @@ export class KiroDatabase {
         FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
       )
     `)
-    this.db.run('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
   }
   getAccounts(): any[] {
     return this.db.prepare('SELECT * FROM accounts').all()
@@ -111,17 +110,6 @@ export class KiroDatabase {
     `
       )
       .run(id, meta.usedCount, meta.limitCount, meta.realEmail || null, meta.lastSync)
-  }
-  getSetting(key: string): string | null {
-    const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any
-    return row ? row.value : null
-  }
-  setSetting(key: string, value: string) {
-    this.db
-      .prepare(
-        'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value'
-      )
-      .run(key, value)
   }
   close() {
     this.db.close()

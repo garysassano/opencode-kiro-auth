@@ -52,7 +52,7 @@ export async function syncFromKiroCli() {
         const id = createDeterministicAccountId(email, authMethod, clientId, data.profile_arn)
         const existing = kiroDb.getAccounts().find((a) => a.id === id)
         const cliExpiresAt = data.expires_at ? new Date(data.expires_at).getTime() : 0
-        if (existing && existing.expires_at >= cliExpiresAt) continue
+        if (existing && existing.is_healthy === 1 && existing.expires_at >= cliExpiresAt) continue
         kiroDb.upsertAccount({
           id,
           email,
@@ -80,7 +80,7 @@ export async function writeToKiroCli(acc: any) {
   if (!existsSync(dbPath)) return
   try {
     const cliDb = new Database(dbPath)
-    cliDb.exec('PRAGMA busy_timeout = 5000')
+    cliDb.run('PRAGMA busy_timeout = 5000')
     const rows = cliDb.prepare('SELECT key, value FROM auth_kv').all() as any[]
     const targetKey = acc.authMethod === 'idc' ? 'kirocli:odic:token' : 'kirocli:social:token'
     const row = rows.find((r) => r.key === targetKey || r.key.endsWith(targetKey))

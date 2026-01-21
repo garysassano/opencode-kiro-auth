@@ -99,6 +99,22 @@ export const createKiroPlugin =
                   }
                   throw new Error('All accounts are unhealthy or rate-limited')
                 }
+                if (count > 1 && am.shouldShowToast())
+                  showToast(
+                    `Using ${acc.realEmail || acc.email} (${am.getAccounts().indexOf(acc) + 1}/${count})`,
+                    'info'
+                  )
+                if (
+                  am.shouldShowUsageToast() &&
+                  acc.usedCount !== undefined &&
+                  acc.limitCount !== undefined
+                ) {
+                  const p = acc.limitCount > 0 ? (acc.usedCount / acc.limitCount) * 100 : 0
+                  showToast(
+                    formatUsageMessage(acc.usedCount, acc.limitCount, acc.realEmail || acc.email),
+                    p >= 80 ? 'warning' : 'info'
+                  )
+                }
                 const auth = am.toAuthDetails(acc)
                 if (accessTokenExpired(auth, config.token_expiry_buffer_ms)) {
                   try {
@@ -333,10 +349,9 @@ export const createKiroPlugin =
                   const existingAm = await AccountManager.loadFromDisk(
                     config.account_selection_strategy
                   )
-                  const allAccounts = existingAm.getAccounts()
-                  const idcAccounts = allAccounts.filter((a) => a.authMethod === 'idc')
-                  if (idcAccounts.length > 0) {
-                    const existingAccounts = idcAccounts.map((acc, idx) => ({
+                  const idcAccs = existingAm.getAccounts().filter((a) => a.authMethod === 'idc')
+                  if (idcAccs.length > 0) {
+                    const existingAccounts = idcAccs.map((acc, idx) => ({
                       email: acc.realEmail || acc.email,
                       index: idx
                     }))

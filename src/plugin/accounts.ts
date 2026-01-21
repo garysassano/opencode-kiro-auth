@@ -108,17 +108,31 @@ export class AccountManager {
       }
       return !(a.rateLimitResetTime && now < a.rateLimitResetTime)
     })
-    if (available.length === 0) return null
     let selected: ManagedAccount | undefined
-    if (this.strategy === 'sticky') {
-      selected = available.find((_, i) => i === this.cursor) || available[0]
-    } else if (this.strategy === 'round-robin') {
-      selected = available[this.cursor % available.length]
-      this.cursor = (this.cursor + 1) % available.length
-    } else if (this.strategy === 'lowest-usage') {
-      selected = [...available].sort(
-        (a, b) => (a.usedCount || 0) - (b.usedCount || 0) || (a.lastUsed || 0) - (b.lastUsed || 0)
-      )[0]
+    if (available.length > 0) {
+      if (this.strategy === 'sticky') {
+        selected = available.find((_, i) => i === this.cursor) || available[0]
+      } else if (this.strategy === 'round-robin') {
+        selected = available[this.cursor % available.length]
+        this.cursor = (this.cursor + 1) % available.length
+      } else if (this.strategy === 'lowest-usage') {
+        selected = [...available].sort(
+          (a, b) => (a.usedCount || 0) - (b.usedCount || 0) || (a.lastUsed || 0) - (b.lastUsed || 0)
+        )[0]
+      }
+    }
+    if (!selected) {
+      const fallback = this.accounts
+        .filter((a) => !a.isHealthy)
+        .sort(
+          (a, b) => (a.usedCount || 0) - (b.usedCount || 0) || (a.lastUsed || 0) - (b.lastUsed || 0)
+        )[0]
+      if (fallback) {
+        fallback.isHealthy = true
+        delete fallback.unhealthyReason
+        delete fallback.recoveryTime
+        selected = fallback
+      }
     }
     if (selected) {
       selected.lastUsed = now
@@ -184,7 +198,7 @@ export class AccountManager {
     if (acc) {
       acc.isHealthy = false
       acc.unhealthyReason = reason
-      acc.recoveryTime = recovery
+      acc.recoveryTime = recovery || Date.now() + 3600000
       kiroDb.upsertAccount(acc)
     }
   }
