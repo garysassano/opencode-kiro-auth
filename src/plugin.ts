@@ -309,32 +309,29 @@ export const createKiroPlugin =
                   if ((res.status === 402 || res.status === 403) && count > 1) {
                     let errorReason = res.status === 402 ? 'Quota' : 'Forbidden'
                     let isPermanent = false
-                    let shouldSkipAccount = false
                     try {
                       const errorBody = await res.text()
                       const errorData = JSON.parse(errorBody)
+                      if (errorData.reason === 'INVALID_MODEL_ID') {
+                        logger.warn(`Invalid model ID for ${acc.email}: ${errorData.message}`)
+                        throw new Error(`Invalid model: ${errorData.message}`)
+                      }
                       if (errorData.reason === 'TEMPORARILY_SUSPENDED') {
                         errorReason = 'Account Suspended'
                         isPermanent = true
-                        shouldSkipAccount = true
-                      } else if (errorData.reason === 'INVALID_MODEL_ID') {
-                        logger.warn(`Invalid model ID for ${acc.email}: ${errorData.message}`)
-                        throw new Error(`Invalid model: ${errorData.message}`)
                       }
                     } catch (e) {
                       if (e instanceof Error && e.message.includes('Invalid model')) {
                         throw e
                       }
                     }
-
-                    if (shouldSkipAccount) {
-                      if (isPermanent) {
-                        acc.failCount = 10
-                      }
-                      am.markUnhealthy(acc, errorReason)
-                      await am.saveToDisk()
-                      continue
+                    if (isPermanent) {
+                      acc.failCount = 10
                     }
+                    am.markUnhealthy(acc, errorReason)
+                    await am.saveToDisk()
+                    showToast(`${errorReason}. Switching account...`, 'warning')
+                    continue
                   }
                   const h: any = {}
                   res.headers.forEach((v, k) => {
