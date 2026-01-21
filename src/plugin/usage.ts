@@ -1,4 +1,4 @@
-import { ManagedAccount, KiroAuthDetails } from './types'
+import { KiroAuthDetails, ManagedAccount } from './types'
 
 export async function fetchUsageLimits(auth: KiroAuthDetails): Promise<any> {
   const url = `https://q.${auth.region}.amazonaws.com/getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&resourceType=AGENTIC_REQUEST`

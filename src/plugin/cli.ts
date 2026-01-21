@@ -1,5 +1,5 @@
-import { createInterface } from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
+import { createInterface } from 'node:readline/promises'
 
 export async function promptAddAnotherAccount(currentCount: number): Promise<boolean> {
   const rl = createInterface({ input, output })

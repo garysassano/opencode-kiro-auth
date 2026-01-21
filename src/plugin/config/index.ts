@@ -1,9 +1,9 @@
-export { KiroConfigSchema, DEFAULT_CONFIG } from './schema'
-export type { KiroConfig } from './schema'
 export {
-  loadConfig,
-  getUserConfigPath,
-  getProjectConfigPath,
+  configExists,
   getDefaultLogsDir,
-  configExists
+  getProjectConfigPath,
+  getUserConfigPath,
+  loadConfig
 } from './loader'
+export { DEFAULT_CONFIG, KiroConfigSchema } from './schema'
+export type { KiroConfig } from './schema'

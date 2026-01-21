@@ -1,8 +1,7 @@
-import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
-import { getIDCAuthHtml, getSuccessHtml, getErrorHtml } from './auth-page'
-import type { KiroRegion } from './types'
+import { createServer, type Server, type ServerResponse } from 'node:http'
+import { getErrorHtml, getIDCAuthHtml, getSuccessHtml } from './auth-page'
 import * as logger from './logger'
-import { KIRO_CONSTANTS } from '../constants'
+import type { KiroRegion } from './types'
 
 export interface KiroIDCTokenResult {
   email: string

@@ -1,4 +1,4 @@
-import { ToolCall, ParsedResponse } from './types'
+import { ParsedResponse, ToolCall } from './types'
 
 interface ParsedEvent {
   type: string

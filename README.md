@@ -7,14 +7,13 @@ OpenCode plugin for AWS Kiro (CodeWhisperer) providing access to Claude Sonnet a
 
 ## Features
 
-- AWS Builder ID (IDC) authentication with seamless device code flow.
-- Intelligent multi-account rotation prioritized by lowest usage.
-- Automated token refresh and rate limit handling with exponential backoff.
-- Native thinking mode support via virtual model mappings.
-- Decoupled storage for credentials and real-time usage metadata.
-- Configurable request timeout and iteration limits to prevent hangs.
-- Automatic port selection for auth server to avoid conflicts.
-- Usage tracking with automatic retry on sync failures.
+- **Multiple Auth Methods**: Supports AWS Builder ID (IDC) and Kiro Desktop (Personal) authentication.
+- **Auto-Sync Kiro CLI**: Automatically imports active sessions from your local `kiro-cli` SQLite database.
+- **Gradual Context Truncation**: Intelligently prevents error 400 by reducing context size dynamically during retries.
+- **Intelligent Account Rotation**: Prioritizes multi-account usage based on lowest available quota.
+- **High-Performance Storage**: Efficient account and usage management using native Bun SQLite.
+- **Native Thinking Mode**: Full support for Claude reasoning capabilities via virtual model mappings.
+- **Automated Recovery**: Exponential backoff for rate limits and automated token refresh.
 
 ## Installation
 
@@ -56,8 +55,8 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
 
 1. Run `opencode auth login`.
 2. Select `Other`, type `kiro`, and press enter.
-3. Follow the terminal instructions to complete the AWS Builder ID authentication.
-4. Configuration template will be automatically created at `~/.config/opencode/kiro.json` on first load.
+3. Choose your preferred method: **AWS Builder ID (IDC)** for device code flow or **Kiro Desktop** for personal tokens.
+4. Auto-Sync will automatically detect existing `kiro-cli` sessions on startup.
 
 ## Configuration
 
@@ -65,6 +64,7 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
 
 ```json
 {
+  "auto_sync_kiro_cli": true,
   "account_selection_strategy": "lowest-usage",
   "default_region": "us-east-1",
   "rate_limit_retry_delay_ms": 5000,
@@ -82,46 +82,28 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
 
 ### Configuration Options
 
-- `account_selection_strategy`: Account rotation strategy (`sticky`, `round-robin`, `lowest-usage`)
-- `default_region`: AWS region (`us-east-1`, `us-west-2`)
-- `rate_limit_retry_delay_ms`: Delay between rate limit retries (1000-60000ms)
-- `rate_limit_max_retries`: Maximum retry attempts for rate limits (0-10)
-- `max_request_iterations`: Maximum loop iterations to prevent hangs (10-1000)
-- `request_timeout_ms`: Request timeout in milliseconds (60000-600000ms)
-- `token_expiry_buffer_ms`: Token refresh buffer time (30000-300000ms)
-- `usage_sync_max_retries`: Retry attempts for usage sync (0-5)
-- `auth_server_port_start`: Starting port for auth server (1024-65535)
-- `auth_server_port_range`: Number of ports to try (1-100)
-- `usage_tracking_enabled`: Enable usage tracking and toast notifications
-- `enable_log_api_request`: Enable detailed API request logging
-
-### Environment Variables
-
-All configuration options can be overridden via environment variables:
-
-- `KIRO_ACCOUNT_SELECTION_STRATEGY`
-- `KIRO_DEFAULT_REGION`
-- `KIRO_RATE_LIMIT_RETRY_DELAY_MS`
-- `KIRO_RATE_LIMIT_MAX_RETRIES`
-- `KIRO_MAX_REQUEST_ITERATIONS`
-- `KIRO_REQUEST_TIMEOUT_MS`
-- `KIRO_TOKEN_EXPIRY_BUFFER_MS`
-- `KIRO_USAGE_SYNC_MAX_RETRIES`
-- `KIRO_AUTH_SERVER_PORT_START`
-- `KIRO_AUTH_SERVER_PORT_RANGE`
-- `KIRO_USAGE_TRACKING_ENABLED`
-- `KIRO_ENABLE_LOG_API_REQUEST`
+- `auto_sync_kiro_cli`: Automatically sync sessions from Kiro CLI (default: `true`).
+- `account_selection_strategy`: Account rotation strategy (`sticky`, `round-robin`, `lowest-usage`).
+- `default_region`: AWS region (`us-east-1`, `us-west-2`).
+- `rate_limit_retry_delay_ms`: Delay between rate limit retries (1000-60000ms).
+- `rate_limit_max_retries`: Maximum retry attempts for rate limits (0-10).
+- `max_request_iterations`: Maximum loop iterations to prevent hangs (10-1000).
+- `request_timeout_ms`: Request timeout in milliseconds (60000-600000ms).
+- `token_expiry_buffer_ms`: Token refresh buffer time (30000-300000ms).
+- `usage_sync_max_retries`: Retry attempts for usage sync (0-5).
+- `auth_server_port_start`: Starting port for auth server (1024-65535).
+- `auth_server_port_range`: Number of ports to try (1-100).
+- `usage_tracking_enabled`: Enable usage tracking and toast notifications.
+- `enable_log_api_request`: Enable detailed API request logging.
 
 ## Storage
 
 **Linux/macOS:**
-- Credentials: `~/.config/opencode/kiro-accounts.json`
-- Usage Tracking: `~/.config/opencode/kiro-usage.json`
+- SQLite Database: `~/.config/opencode/kiro.db`
 - Plugin Config: `~/.config/opencode/kiro.json`
 
 **Windows:**
-- Credentials: `%APPDATA%\opencode\kiro-accounts.json`
-- Usage Tracking: `%APPDATA%\opencode\kiro-usage.json`
+- SQLite Database: `%APPDATA%\opencode\kiro.db`
 - Plugin Config: `%APPDATA%\opencode\kiro.json`
 
 ## Acknowledgements

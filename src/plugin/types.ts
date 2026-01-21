@@ -1,4 +1,4 @@
-export type KiroAuthMethod = 'idc'
+export type KiroAuthMethod = 'idc' | 'desktop'
 export type KiroRegion = 'us-east-1' | 'us-west-2'
 
 export interface KiroAuthDetails {
@@ -42,40 +42,11 @@ export interface ManagedAccount {
   lastUsed?: number
 }
 
-export interface AccountMetadata {
-  id: string
-  email: string
-  realEmail?: string
-  authMethod: KiroAuthMethod
-  region: KiroRegion
-  clientId?: string
-  clientSecret?: string
-  profileArn?: string
-  refreshToken: string
-  accessToken: string
-  expiresAt: number
-  rateLimitResetTime: number
-  isHealthy: boolean
-  unhealthyReason?: string
-  recoveryTime?: number
-}
-
-export interface AccountStorage {
-  version: 1
-  accounts: AccountMetadata[]
-  activeIndex: number
-}
-
 export interface UsageMetadata {
   usedCount: number
   limitCount: number
   realEmail?: string
   lastSync: number
-}
-
-export interface UsageStorage {
-  version: 1
-  usage: Record<string, UsageMetadata>
 }
 
 export interface CodeWhispererMessage {

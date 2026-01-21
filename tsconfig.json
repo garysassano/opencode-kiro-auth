@@ -4,6 +4,7 @@
     "target": "ESNext",
     "module": "Preserve",
     "moduleResolution": "bundler",
+    "types": ["bun-types", "node"],
     "strict": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,

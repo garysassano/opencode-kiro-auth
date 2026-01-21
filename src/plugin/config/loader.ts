@@ -1,14 +1,14 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import * as logger from '../logger'
 import {
   AccountSelectionStrategySchema,
+  DEFAULT_CONFIG,
   KiroConfigSchema,
   RegionSchema,
-  DEFAULT_CONFIG,
   type KiroConfig
 } from './schema'
-import * as logger from '../logger'
 
 function getConfigDir(): string {
   const platform = process.platform

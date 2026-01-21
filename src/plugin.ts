@@ -1,24 +1,25 @@
-import { loadConfig } from './plugin/config'
 import { exec } from 'node:child_process'
-import { AccountManager, generateAccountId } from './plugin/accounts'
+import { KIRO_CONSTANTS } from './constants'
 import { accessTokenExpired, encodeRefreshToken } from './kiro/auth'
-import { refreshAccessToken } from './plugin/token'
+import type { KiroIDCTokenResult } from './kiro/oauth-idc'
+import { authorizeKiroIDC } from './kiro/oauth-idc'
+import { AccountManager, generateAccountId } from './plugin/accounts'
+import { promptAddAnotherAccount, promptLoginMode } from './plugin/cli'
+import { loadConfig } from './plugin/config'
+import { KiroTokenRefreshError } from './plugin/errors'
+import * as logger from './plugin/logger'
 import { transformToCodeWhisperer } from './plugin/request'
 import { parseEventStream } from './plugin/response'
-import { transformKiroStream } from './plugin/streaming'
-import { fetchUsageLimits, updateAccountQuota } from './plugin/usage'
-import { authorizeKiroIDC } from './kiro/oauth-idc'
 import { startIDCAuthServer } from './plugin/server'
-import { KiroTokenRefreshError } from './plugin/errors'
-import { promptAddAnotherAccount, promptLoginMode } from './plugin/cli'
+import { migrateJsonToSqlite } from './plugin/storage/migration'
+import { transformKiroStream } from './plugin/streaming'
+import { syncFromKiroCli } from './plugin/sync/kiro-cli'
+import { refreshAccessToken } from './plugin/token'
 import type { ManagedAccount } from './plugin/types'
-import type { KiroIDCTokenResult } from './kiro/oauth-idc'
-import { KIRO_CONSTANTS } from './constants'
-import * as logger from './plugin/logger'
+import { fetchUsageLimits, updateAccountQuota } from './plugin/usage'
 
 const KIRO_PROVIDER_ID = 'kiro'
 const KIRO_API_PATTERN = /^(https?:\/\/)?q\.[a-z0-9-]+\.amazonaws\.com/
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const isNetworkError = (e: any) =>
   e instanceof Error && /econnreset|etimedout|enotfound|network|fetch failed/i.test(e.message)
@@ -30,22 +31,19 @@ const formatUsageMessage = (usedCount: number, limitCount: number, email: string
   }
   return `Usage (${email}): ${usedCount}`
 }
-
 const openBrowser = (url: string) => {
   const escapedUrl = url.replace(/"/g, '\\"')
   const platform = process.platform
-  const command =
+  const cmd =
     platform === 'win32'
       ? `cmd /c start "" "${escapedUrl}"`
       : platform === 'darwin'
         ? `open "${escapedUrl}"`
         : `xdg-open "${escapedUrl}"`
-
-  exec(command, (error) => {
-    if (error) logger.warn(`Failed to open browser automatically: ${error.message}`, error)
+  exec(cmd, (error) => {
+    if (error) logger.warn(`Browser error: ${error.message}`)
   })
 }
-
 export const createKiroPlugin =
   (id: string) =>
   async ({ client, directory }: any) => {
@@ -53,12 +51,13 @@ export const createKiroPlugin =
     const showToast = (message: string, variant: 'info' | 'warning' | 'success' | 'error') => {
       client.tui.showToast({ body: { message, variant } }).catch(() => {})
     }
-
     return {
       auth: {
         provider: id,
         loader: async (getAuth: any) => {
           await getAuth()
+          await migrateJsonToSqlite()
+          if (config.auto_sync_kiro_cli) await syncFromKiroCli()
           const am = await AccountManager.loadFromDisk(config.account_selection_strategy)
           return {
             apiKey: '',
@@ -69,180 +68,151 @@ export const createKiroPlugin =
             async fetch(input: any, init?: any): Promise<Response> {
               const url = typeof input === 'string' ? input : input.url
               if (!KIRO_API_PATTERN.test(url)) return fetch(input, init)
-
               const body = init?.body ? JSON.parse(init.body) : {}
               const model = extractModel(url) || body.model || 'claude-sonnet-4-5'
               const think = model.endsWith('-thinking') || !!body.providerOptions?.thinkingConfig
               const budget = body.providerOptions?.thinkingConfig?.thinkingBudget || 20000
-
-              let retry = 0
-              let iterations = 0
-              const startTime = Date.now()
-              const maxIterations = config.max_request_iterations
-              const timeoutMs = config.request_timeout_ms
-
+              let retry = 0,
+                iterations = 0,
+                reductionFactor = 1.0
+              const startTime = Date.now(),
+                maxIterations = config.max_request_iterations,
+                timeoutMs = config.request_timeout_ms
               while (true) {
                 iterations++
-                const elapsed = Date.now() - startTime
-
-                if (iterations > maxIterations) {
-                  throw new Error(
-                    `Request exceeded max iterations (${maxIterations}). All accounts may be unhealthy or rate-limited.`
-                  )
-                }
-
-                if (elapsed > timeoutMs) {
-                  throw new Error(
-                    `Request timeout after ${Math.ceil(elapsed / 1000)}s. Max timeout: ${Math.ceil(timeoutMs / 1000)}s.`
-                  )
-                }
-
+                if (iterations > maxIterations)
+                  throw new Error(`Exceeded max iterations (${maxIterations})`)
+                if (Date.now() - startTime > timeoutMs) throw new Error('Request timeout')
                 const count = am.getAccountCount()
-                if (count === 0) throw new Error('No accounts. Login first.')
+                if (count === 0) throw new Error('No accounts')
                 const acc = am.getCurrentOrNext()
                 if (!acc) {
-                  const w = am.getMinWaitTime() || 60000
-                  showToast(
-                    `All accounts rate-limited. Waiting ${Math.ceil(w / 1000)}s...`,
-                    'warning'
-                  )
-                  await sleep(w)
-                  continue
+                  const wait = am.getMinWaitTime()
+                  if (wait > 0 && wait < 30000) {
+                    if (am.shouldShowToast())
+                      showToast(
+                        `All accounts rate-limited. Waiting ${Math.ceil(wait / 1000)}s...`,
+                        'warning'
+                      )
+                    await sleep(wait)
+                    continue
+                  }
+                  throw new Error('All accounts are unhealthy or rate-limited')
                 }
-
-                if (count > 1 && am.shouldShowToast())
-                  showToast(
-                    `Using ${acc.realEmail || acc.email} (${am.getAccounts().indexOf(acc) + 1}/${count})`,
-                    'info'
-                  )
-
-                if (
-                  am.shouldShowUsageToast() &&
-                  acc.usedCount !== undefined &&
-                  acc.limitCount !== undefined
-                ) {
-                  const percentage = acc.limitCount > 0 ? (acc.usedCount / acc.limitCount) * 100 : 0
-                  const variant = percentage >= 80 ? 'warning' : 'info'
-                  showToast(
-                    formatUsageMessage(acc.usedCount, acc.limitCount, acc.realEmail || acc.email),
-                    variant
-                  )
-                }
-
-                let auth = am.toAuthDetails(acc)
+                const auth = am.toAuthDetails(acc)
                 if (accessTokenExpired(auth, config.token_expiry_buffer_ms)) {
                   try {
-                    logger.log(`Refreshing token for ${acc.realEmail || acc.email}`)
-                    auth = await refreshAccessToken(auth)
-                    am.updateFromAuth(acc, auth)
+                    const newAuth = await refreshAccessToken(auth)
+                    am.updateFromAuth(acc, newAuth)
                     await am.saveToDisk()
                   } catch (e: any) {
-                    const msg = e instanceof KiroTokenRefreshError ? e.message : String(e)
-                    showToast(`Refresh failed for ${acc.realEmail || acc.email}: ${msg}`, 'error')
-                    if (e instanceof KiroTokenRefreshError && e.code === 'invalid_grant') {
-                      am.removeAccount(acc)
+                    if (config.auto_sync_kiro_cli) await syncFromKiroCli()
+                    const refreshedAm = await AccountManager.loadFromDisk(
+                      config.account_selection_strategy
+                    )
+                    const stillAcc = refreshedAm.getAccounts().find((a) => a.id === acc.id)
+                    if (
+                      stillAcc &&
+                      !accessTokenExpired(
+                        refreshedAm.toAuthDetails(stillAcc),
+                        config.token_expiry_buffer_ms
+                      )
+                    ) {
+                      showToast('Credentials recovered from Kiro CLI sync.', 'info')
+                      continue
+                    }
+                    if (
+                      e instanceof KiroTokenRefreshError &&
+                      (e.code === 'ExpiredTokenException' ||
+                        e.code === 'InvalidTokenException' ||
+                        e.code === 'HTTP_401' ||
+                        e.code === 'HTTP_403')
+                    ) {
+                      am.markUnhealthy(acc, e.message)
                       await am.saveToDisk()
                       continue
                     }
                     throw e
                   }
                 }
-
-                let reductionFactor = 1.0
-                const prepRequest = (factor: number) =>
-                  transformToCodeWhisperer(url, init?.body, model, auth, think, budget, factor)
+                const prepRequest = (f: number) =>
+                  transformToCodeWhisperer(url, init?.body, model, auth, think, budget, f)
                 let prep = prepRequest(reductionFactor)
-
                 const apiTimestamp = config.enable_log_api_request ? logger.getTimestamp() : null
-                let lastRequestData: any = null
-
-                while (true) {
-                  let parsedBody: any = null
-                  if (prep.init.body && typeof prep.init.body === 'string') {
-                    try {
-                      parsedBody = JSON.parse(prep.init.body)
-                    } catch (e) {
-                      parsedBody = prep.init.body
-                    }
-                  }
-
-                  lastRequestData = {
-                    url: prep.url,
-                    method: prep.init.method,
-                    headers: prep.init.headers,
-                    body: parsedBody,
-                    conversationId: prep.conversationId,
-                    model: prep.effectiveModel,
-                    email: acc.realEmail || acc.email
-                  }
-
-                  if (config.enable_log_api_request && apiTimestamp) {
-                    logger.logApiRequest(lastRequestData, apiTimestamp)
-                  }
-
+                if (config.enable_log_api_request && apiTimestamp) {
+                  let parsedBody = null
                   try {
-                    const res = await fetch(prep.url, prep.init)
-
-                    if (config.enable_log_api_request && apiTimestamp) {
-                      const responseHeaders: Record<string, string> = {}
-                      res.headers.forEach((value, key) => {
-                        responseHeaders[key] = value
-                      })
-
-                      logger.logApiResponse(
-                        {
-                          status: res.status,
-                          statusText: res.statusText,
-                          headers: responseHeaders,
-                          conversationId: prep.conversationId,
-                          model: prep.effectiveModel
-                        },
-                        apiTimestamp
-                      )
-                    }
-
-                    if (res.ok) {
-                      if (config.usage_tracking_enabled) {
-                        const syncUsage = async (attempt = 0): Promise<void> => {
-                          try {
-                            const u = await fetchUsageLimits(auth)
-                            updateAccountQuota(acc, u, am)
-                            await am.saveToDisk()
-                          } catch (e: any) {
-                            if (attempt < config.usage_sync_max_retries) {
-                              const delay = 1000 * Math.pow(2, attempt)
-                              await sleep(delay)
-                              return syncUsage(attempt + 1)
-                            }
-                            logger.warn(
-                              `Usage sync failed for ${acc.realEmail || acc.email} after ${attempt + 1} attempts: ${e.message}`
-                            )
+                    parsedBody = prep.init.body ? JSON.parse(prep.init.body as string) : null
+                  } catch {}
+                  logger.logApiRequest(
+                    {
+                      url: prep.url,
+                      method: prep.init.method,
+                      headers: prep.init.headers,
+                      body: parsedBody,
+                      conversationId: prep.conversationId,
+                      model: prep.effectiveModel,
+                      email: acc.realEmail || acc.email
+                    },
+                    apiTimestamp
+                  )
+                }
+                try {
+                  const res = await fetch(prep.url, prep.init)
+                  if (config.enable_log_api_request && apiTimestamp) {
+                    const h: any = {}
+                    res.headers.forEach((v, k) => {
+                      h[k] = v
+                    })
+                    logger.logApiResponse(
+                      {
+                        status: res.status,
+                        statusText: res.statusText,
+                        headers: h,
+                        conversationId: prep.conversationId,
+                        model: prep.effectiveModel
+                      },
+                      apiTimestamp
+                    )
+                  }
+                  if (res.ok) {
+                    if (config.usage_tracking_enabled) {
+                      const sync = async (att = 0): Promise<void> => {
+                        try {
+                          const u = await fetchUsageLimits(auth)
+                          updateAccountQuota(acc, u, am)
+                          await am.saveToDisk()
+                        } catch (e: any) {
+                          if (att < config.usage_sync_max_retries) {
+                            await sleep(1000 * Math.pow(2, att))
+                            return sync(att + 1)
                           }
                         }
-                        syncUsage().catch(() => {})
                       }
-                      if (prep.streaming) {
-                        const s = transformKiroStream(res, model, prep.conversationId)
-                        return new Response(
-                          new ReadableStream({
-                            async start(c) {
-                              try {
-                                for await (const e of s)
-                                  c.enqueue(
-                                    new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)
-                                  )
-                                c.close()
-                              } catch (err) {
-                                c.error(err)
-                              }
+                      sync().catch(() => {})
+                    }
+                    if (prep.streaming) {
+                      const s = transformKiroStream(res, model, prep.conversationId)
+                      return new Response(
+                        new ReadableStream({
+                          async start(c) {
+                            try {
+                              for await (const e of s)
+                                c.enqueue(
+                                  new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)
+                                )
+                              c.close()
+                            } catch (err) {
+                              c.error(err)
                             }
-                          }),
-                          { headers: { 'Content-Type': 'text/event-stream' } }
-                        )
-                      }
-                      const text = await res.text()
-                      const p = parseEventStream(text)
-                      const oai: any = {
+                          }
+                        }),
+                        { headers: { 'Content-Type': 'text/event-stream' } }
+                      )
+                    }
+                    const text = await res.text(),
+                      p = parseEventStream(text),
+                      oai: any = {
                         id: prep.conversationId,
                         object: 'chat.completion',
                         created: Math.floor(Date.now() / 1000),
@@ -260,113 +230,90 @@ export const createKiroPlugin =
                           total_tokens: (p.inputTokens || 0) + (p.outputTokens || 0)
                         }
                       }
-                      if (p.toolCalls.length > 0)
-                        oai.choices[0].message.tool_calls = p.toolCalls.map((tc) => ({
-                          id: tc.toolUseId,
-                          type: 'function',
-                          function: {
-                            name: tc.name,
-                            arguments:
-                              typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input)
-                          }
-                        }))
-                      return new Response(JSON.stringify(oai), {
-                        headers: { 'Content-Type': 'application/json' }
-                      })
-                    }
-
-                    if (res.status === 400 && reductionFactor > 0.4) {
-                      reductionFactor -= 0.2
-                      showToast(
-                        `Context too long. Retrying with ${Math.round(reductionFactor * 100)}% context...`,
-                        'warning'
-                      )
-                      prep = prepRequest(reductionFactor)
+                    if (p.toolCalls.length > 0)
+                      oai.choices[0].message.tool_calls = p.toolCalls.map((tc) => ({
+                        id: tc.toolUseId,
+                        type: 'function',
+                        function: {
+                          name: tc.name,
+                          arguments:
+                            typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input)
+                        }
+                      }))
+                    return new Response(JSON.stringify(oai), {
+                      headers: { 'Content-Type': 'application/json' }
+                    })
+                  }
+                  if (res.status === 400 && reductionFactor > 0.4) {
+                    reductionFactor -= 0.2
+                    showToast(
+                      `Context too long. Retrying with ${Math.round(reductionFactor * 100)}%...`,
+                      'warning'
+                    )
+                    prep = prepRequest(reductionFactor)
+                    continue
+                  }
+                  if (res.status === 401 && retry < config.rate_limit_max_retries) {
+                    retry++
+                    continue
+                  }
+                  if (res.status === 429) {
+                    const w = parseInt(res.headers.get('retry-after') || '60') * 1000
+                    am.markRateLimited(acc, w)
+                    await am.saveToDisk()
+                    if (count > 1) {
+                      showToast(`Rate limited. Switching account...`, 'warning')
                       continue
                     }
-
-                    if (res.status === 401 && retry < config.rate_limit_max_retries) {
-                      retry++
-                      break
-                    }
-                    if (res.status === 429) {
-                      const wait = parseInt(res.headers.get('retry-after') || '60') * 1000
-                      am.markRateLimited(acc, wait)
-                      await am.saveToDisk()
-                      if (count > 1) {
-                        showToast(
-                          `Rate limited on ${acc.realEmail || acc.email}. Switching account...`,
-                          'warning'
-                        )
-                        break
-                      } else {
-                        showToast(
-                          `Rate limited. Retrying in ${Math.ceil(wait / 1000)}s...`,
-                          'warning'
-                        )
-                        await sleep(wait)
-                        break
-                      }
-                    }
-                    if ((res.status === 402 || res.status === 403) && count > 1) {
-                      showToast(
-                        `${res.status === 402 ? 'Quota exhausted' : 'Forbidden'} on ${acc.realEmail || acc.email}. Switching...`,
-                        'warning'
-                      )
-                      am.markUnhealthy(acc, res.status === 402 ? 'Quota' : 'Forbidden')
-                      await am.saveToDisk()
-                      break
-                    }
-
-                    const responseHeaders: Record<string, string> = {}
-                    res.headers.forEach((value, key) => {
-                      responseHeaders[key] = value
-                    })
-
-                    const responseData = {
-                      status: res.status,
-                      statusText: res.statusText,
-                      headers: responseHeaders,
-                      error: `Kiro Error: ${res.status}`,
-                      conversationId: prep.conversationId,
-                      model: prep.effectiveModel
-                    }
-
-                    if (config.enable_log_api_request && apiTimestamp) {
-                      logger.logApiResponse(responseData, apiTimestamp)
-                    } else {
-                      const errorTimestamp = logger.getTimestamp()
-                      logger.logApiError(lastRequestData, responseData, errorTimestamp)
-                    }
-
-                    throw new Error(`Kiro Error: ${res.status}`)
-                  } catch (e) {
-                    if (isNetworkError(e) && retry < config.rate_limit_max_retries) {
-                      const delay = 5000 * Math.pow(2, retry)
-                      showToast(
-                        `Network error. Retrying in ${Math.ceil(delay / 1000)}s...`,
-                        'warning'
-                      )
-                      await sleep(delay)
-                      retry++
-                      break
-                    }
-
-                    const networkErrorData = {
-                      error: String(e),
-                      conversationId: prep.conversationId,
-                      model: prep.effectiveModel
-                    }
-
-                    if (config.enable_log_api_request && apiTimestamp) {
-                      logger.logApiResponse(networkErrorData, apiTimestamp)
-                    } else {
-                      const errorTimestamp = logger.getTimestamp()
-                      logger.logApiError(lastRequestData, networkErrorData, errorTimestamp)
-                    }
-
-                    throw e
+                    showToast(`Rate limited. Waiting ${Math.ceil(w / 1000)}s...`, 'warning')
+                    await sleep(w)
+                    continue
                   }
+                  if ((res.status === 402 || res.status === 403) && count > 1) {
+                    am.markUnhealthy(acc, res.status === 402 ? 'Quota' : 'Forbidden')
+                    await am.saveToDisk()
+                    continue
+                  }
+                  const h: any = {}
+                  res.headers.forEach((v, k) => {
+                    h[k] = v
+                  })
+                  const rData = {
+                    status: res.status,
+                    statusText: res.statusText,
+                    headers: h,
+                    error: `Kiro Error: ${res.status}`,
+                    conversationId: prep.conversationId,
+                    model: prep.effectiveModel
+                  }
+                  let lastBody = null
+                  try {
+                    lastBody = prep.init.body ? JSON.parse(prep.init.body as string) : null
+                  } catch {}
+                  if (!config.enable_log_api_request)
+                    logger.logApiError(
+                      {
+                        url: prep.url,
+                        method: prep.init.method,
+                        headers: prep.init.headers,
+                        body: lastBody,
+                        conversationId: prep.conversationId,
+                        model: prep.effectiveModel,
+                        email: acc.realEmail || acc.email
+                      },
+                      rData,
+                      logger.getTimestamp()
+                    )
+                  throw new Error(`Kiro Error: ${res.status}`)
+                } catch (e) {
+                  if (isNetworkError(e) && retry < config.rate_limit_max_retries) {
+                    const d = 5000 * Math.pow(2, retry)
+                    showToast(`Network error. Retrying in ${Math.ceil(d / 1000)}s...`, 'warning')
+                    await sleep(d)
+                    retry++
+                    continue
+                  }
+                  throw e
                 }
               }
             }
@@ -380,167 +327,91 @@ export const createKiroPlugin =
             authorize: async (inputs?: any) =>
               new Promise(async (resolve) => {
                 const region = config.default_region
-
                 if (inputs) {
                   const accounts: KiroIDCTokenResult[] = []
                   let startFresh = true
-
                   const existingAm = await AccountManager.loadFromDisk(
                     config.account_selection_strategy
                   )
                   if (existingAm.getAccountCount() > 0) {
-                    const existingAccounts = existingAm.getAccounts().map((acc, idx) => ({
-                      email: acc.realEmail || acc.email,
-                      index: idx
-                    }))
-
-                    const loginMode = await promptLoginMode(existingAccounts)
-                    startFresh = loginMode === 'fresh'
-
-                    console.log(
-                      startFresh
-                        ? '\nStarting fresh - existing accounts will be replaced.\n'
-                        : '\nAdding to existing accounts.\n'
-                    )
+                    const existingAccounts = existingAm
+                      .getAccounts()
+                      .map((acc, idx) => ({ email: acc.realEmail || acc.email, index: idx }))
+                    startFresh = (await promptLoginMode(existingAccounts)) === 'fresh'
                   }
-
                   while (true) {
-                    console.log(`\n=== Kiro IDC Auth (Account ${accounts.length + 1}) ===\n`)
-
-                    const result = await (async (): Promise<
-                      KiroIDCTokenResult | { type: 'failed'; error: string }
-                    > => {
-                      try {
-                        const authData = await authorizeKiroIDC(region)
-                        const { url, waitForAuth } = await startIDCAuthServer(
-                          authData,
-                          config.auth_server_port_start,
-                          config.auth_server_port_range
-                        )
-
-                        console.log('OAuth URL:\n' + url + '\n')
-                        openBrowser(url)
-
-                        const res = await waitForAuth()
-                        return res as KiroIDCTokenResult
-                      } catch (e: any) {
-                        return { type: 'failed' as const, error: e.message }
-                      }
-                    })()
-
-                    if ('type' in result && result.type === 'failed') {
-                      if (accounts.length === 0) {
-                        return resolve({
-                          url: '',
-                          instructions: `Authentication failed: ${result.error}`,
-                          method: 'auto',
-                          callback: async () => ({ type: 'failed' })
-                        })
-                      }
-
-                      console.warn(
-                        `[opencode-kiro-auth] Skipping failed account ${accounts.length + 1}: ${result.error}`
+                    try {
+                      const authData = await authorizeKiroIDC(region)
+                      const { url, waitForAuth } = await startIDCAuthServer(
+                        authData,
+                        config.auth_server_port_start,
+                        config.auth_server_port_range
                       )
-                      break
-                    }
-
-                    const successResult = result as KiroIDCTokenResult
-                    accounts.push(successResult)
-
-                    const isFirstAccount = accounts.length === 1
-                    const am = await AccountManager.loadFromDisk(config.account_selection_strategy)
-
-                    if (isFirstAccount && startFresh) {
-                      am.getAccounts().forEach((acc) => am.removeAccount(acc))
-                    }
-
-                    const acc: ManagedAccount = {
-                      id: generateAccountId(),
-                      email: successResult.email,
-                      authMethod: 'idc',
-                      region,
-                      clientId: successResult.clientId,
-                      clientSecret: successResult.clientSecret,
-                      refreshToken: successResult.refreshToken,
-                      accessToken: successResult.accessToken,
-                      expiresAt: successResult.expiresAt,
-                      rateLimitResetTime: 0,
-                      isHealthy: true
-                    }
-
-                    try {
-                      const u = await fetchUsageLimits({
-                        refresh: encodeRefreshToken({
-                          refreshToken: successResult.refreshToken,
-                          clientId: successResult.clientId,
-                          clientSecret: successResult.clientSecret,
-                          authMethod: 'idc'
-                        }),
-                        access: successResult.accessToken,
-                        expires: successResult.expiresAt,
-                        authMethod: 'idc',
-                        region,
-                        clientId: successResult.clientId,
-                        clientSecret: successResult.clientSecret,
-                        email: successResult.email
-                      })
-                      am.updateUsage(acc.id, {
-                        usedCount: u.usedCount,
-                        limitCount: u.limitCount,
-                        realEmail: u.email
-                      })
-                    } catch (e: any) {
-                      logger.warn(`Initial usage fetch failed: ${e.message}`, e)
-                    }
-
-                    am.addAccount(acc)
-                    await am.saveToDisk()
-
-                    showToast(
-                      `Account ${accounts.length} authenticated${successResult.email ? ` (${successResult.email})` : ''}`,
-                      'success'
-                    )
-
-                    let currentAccountCount = accounts.length
-                    try {
-                      const currentStorage = await AccountManager.loadFromDisk(
+                      openBrowser(url)
+                      const res = await waitForAuth()
+                      accounts.push(res as KiroIDCTokenResult)
+                      const am = await AccountManager.loadFromDisk(
                         config.account_selection_strategy
                       )
-                      currentAccountCount = currentStorage.getAccountCount()
-                    } catch {}
-
-                    const addAnother = await promptAddAnotherAccount(currentAccountCount)
-                    if (!addAnother) {
+                      if (accounts.length === 1 && startFresh)
+                        am.getAccounts().forEach((a) => am.removeAccount(a))
+                      const acc: ManagedAccount = {
+                        id: generateAccountId(),
+                        email: res.email,
+                        authMethod: 'idc',
+                        region,
+                        clientId: res.clientId,
+                        clientSecret: res.clientSecret,
+                        refreshToken: res.refreshToken,
+                        accessToken: res.accessToken,
+                        expiresAt: res.expiresAt,
+                        rateLimitResetTime: 0,
+                        isHealthy: true
+                      }
+                      try {
+                        const u = await fetchUsageLimits({
+                          refresh: encodeRefreshToken({
+                            refreshToken: res.refreshToken,
+                            clientId: res.clientId,
+                            clientSecret: res.clientSecret,
+                            authMethod: 'idc'
+                          }),
+                          access: res.accessToken,
+                          expires: res.expiresAt,
+                          authMethod: 'idc',
+                          region,
+                          clientId: res.clientId,
+                          clientSecret: res.clientSecret,
+                          email: res.email
+                        })
+                        am.updateUsage(acc.id, {
+                          usedCount: u.usedCount,
+                          limitCount: u.limitCount,
+                          realEmail: u.email
+                        })
+                      } catch {}
+                      am.addAccount(acc)
+                      await am.saveToDisk()
+                      showToast(`Account authenticated (${res.email})`, 'success')
+                      if (!(await promptAddAnotherAccount(am.getAccountCount()))) break
+                    } catch (e: any) {
+                      showToast(`Failed: ${e.message}`, 'error')
                       break
                     }
                   }
-
-                  const primary = accounts[0]
-                  if (!primary) {
-                    return resolve({
-                      url: '',
-                      instructions: 'Authentication cancelled',
-                      method: 'auto',
-                      callback: async () => ({ type: 'failed' })
-                    })
-                  }
-
-                  let actualAccountCount = accounts.length
-                  try {
-                    const finalStorage = await AccountManager.loadFromDisk(
-                      config.account_selection_strategy
-                    )
-                    actualAccountCount = finalStorage.getAccountCount()
-                  } catch {}
-
+                  const finalAm = await AccountManager.loadFromDisk(
+                    config.account_selection_strategy
+                  )
                   return resolve({
                     url: '',
-                    instructions: `Multi-account setup complete (${actualAccountCount} account(s)).`,
+                    instructions: `Complete (${finalAm.getAccountCount()} accounts).`,
                     method: 'auto',
-                    callback: async () => ({ type: 'success', key: primary.accessToken })
+                    callback: async () => ({
+                      type: 'success',
+                      key: finalAm.getAccounts()[0]?.accessToken
+                    })
                   })
                 }
-
                 try {
                   const authData = await authorizeKiroIDC(region)
                   const { url, waitForAuth } = await startIDCAuthServer(
@@ -551,14 +422,12 @@ export const createKiroPlugin =
                   openBrowser(url)
                   resolve({
                     url,
-                    instructions: `Open this URL to continue: ${url}`,
+                    instructions: `Open: ${url}`,
                     method: 'auto',
                     callback: async () => {
                       try {
-                        const res = await waitForAuth()
-                        const am = await AccountManager.loadFromDisk(
-                          config.account_selection_strategy
-                        )
+                        const res = await waitForAuth(),
+                          am = await AccountManager.loadFromDisk(config.account_selection_strategy)
                         const acc: ManagedAccount = {
                           id: generateAccountId(),
                           email: res.email,
@@ -572,56 +441,64 @@ export const createKiroPlugin =
                           rateLimitResetTime: 0,
                           isHealthy: true
                         }
-                        try {
-                          const u = await fetchUsageLimits({
-                            refresh: encodeRefreshToken({
-                              refreshToken: res.refreshToken,
-                              clientId: res.clientId,
-                              clientSecret: res.clientSecret,
-                              authMethod: 'idc'
-                            }),
-                            access: res.accessToken,
-                            expires: res.expiresAt,
-                            authMethod: 'idc',
-                            region,
-                            clientId: res.clientId,
-                            clientSecret: res.clientSecret,
-                            email: res.email
-                          })
-                          am.updateUsage(acc.id, {
-                            usedCount: u.usedCount,
-                            limitCount: u.limitCount,
-                            realEmail: u.email
-                          })
-                        } catch (e: any) {
-                          logger.warn(`Initial usage fetch failed: ${e.message}`, e)
-                        }
                         am.addAccount(acc)
                         await am.saveToDisk()
-                        showToast(`Successfully logged in as ${res.email}`, 'success')
                         return { type: 'success', key: res.accessToken }
                       } catch (e: any) {
-                        logger.error(`Login failed: ${e.message}`, e)
-                        showToast(`Login failed: ${e.message}`, 'error')
                         return { type: 'failed' }
                       }
                     }
                   })
                 } catch (e: any) {
-                  logger.error(`Authorization failed: ${e.message}`, e)
-                  showToast(`Authorization failed: ${e.message}`, 'error')
                   resolve({
                     url: '',
-                    instructions: 'Authorization failed',
+                    instructions: 'Failed',
                     method: 'auto',
                     callback: async () => ({ type: 'failed' })
                   })
                 }
               })
+          },
+          {
+            id: 'desktop',
+            label: 'Kiro Desktop (Personal)',
+            type: 'api',
+            authorize: async (inputs: any) => {
+              const token = inputs.apiKey
+              if (!token) return { type: 'failed' }
+              const am = await AccountManager.loadFromDisk(config.account_selection_strategy)
+              const acc: ManagedAccount = {
+                id: generateAccountId(),
+                email: 'desktop-user@kiro.dev',
+                authMethod: 'desktop',
+                region: config.default_region,
+                refreshToken: token,
+                accessToken: '',
+                expiresAt: 0,
+                rateLimitResetTime: 0,
+                isHealthy: true
+              }
+              try {
+                const auth = am.toAuthDetails(acc)
+                const newAuth = await refreshAccessToken(auth)
+                am.updateFromAuth(acc, newAuth)
+                const u = await fetchUsageLimits(newAuth)
+                am.updateUsage(acc.id, {
+                  usedCount: u.usedCount,
+                  limitCount: u.limitCount,
+                  realEmail: u.email
+                })
+                am.addAccount(acc)
+                await am.saveToDisk()
+                return { type: 'success', key: acc.accessToken }
+              } catch (e: any) {
+                showToast(`Failed: ${e.message}`, 'error')
+                return { type: 'failed' }
+              }
+            }
           }
         ]
       }
     }
   }
-
 export const KiroOAuthPlugin = createKiroPlugin(KIRO_PROVIDER_ID)

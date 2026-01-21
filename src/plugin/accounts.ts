@@ -1,18 +1,28 @@
-import { randomBytes } from 'node:crypto'
-import { loadAccounts, saveAccounts, loadUsage, saveUsage } from './storage'
+import { createHash, randomBytes } from 'node:crypto'
+import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth'
+import { kiroDb } from './storage/sqlite'
+import { writeToKiroCli } from './sync/kiro-cli'
 import type {
-  ManagedAccount,
-  AccountMetadata,
   AccountSelectionStrategy,
   KiroAuthDetails,
+  ManagedAccount,
   RefreshParts,
   UsageMetadata
 } from './types'
-import { KIRO_CONSTANTS } from '../constants'
-import { encodeRefreshToken, decodeRefreshToken } from '../kiro/auth'
 
 export function generateAccountId(): string {
   return randomBytes(16).toString('hex')
+}
+
+export function createDeterministicAccountId(
+  email: string,
+  method: string,
+  clientId?: string,
+  profileArn?: string
+): string {
+  return createHash('sha256')
+    .update(`${email}:${method}:${clientId || ''}:${profileArn || ''}`)
+    .digest('hex')
 }
 
 export class AccountManager {
@@ -22,7 +32,6 @@ export class AccountManager {
   private strategy: AccountSelectionStrategy
   private lastToastTime = 0
   private lastUsageToastTime = 0
-
   constructor(
     accounts: ManagedAccount[],
     usage: Record<string, UsageMetadata>,
@@ -41,42 +50,50 @@ export class AccountManager {
       }
     }
   }
-
   static async loadFromDisk(strategy?: AccountSelectionStrategy): Promise<AccountManager> {
-    const s = await loadAccounts()
-    const u = await loadUsage()
-    const accounts: ManagedAccount[] = s.accounts.map((m) => ({
-      ...m,
-      region: m.region || KIRO_CONSTANTS.DEFAULT_REGION
+    const rows = kiroDb.getAccounts()
+    const usage = kiroDb.getUsage()
+    const accounts: ManagedAccount[] = rows.map((r: any) => ({
+      id: r.id,
+      email: r.email,
+      realEmail: r.real_email,
+      authMethod: r.auth_method as any,
+      region: r.region as any,
+      clientId: r.client_id,
+      clientSecret: r.client_secret,
+      profileArn: r.profile_arn,
+      refreshToken: r.refresh_token,
+      accessToken: r.access_token,
+      expiresAt: r.expires_at,
+      rateLimitResetTime: r.rate_limit_reset,
+      isHealthy: r.is_healthy === 1,
+      unhealthyReason: r.unhealthy_reason,
+      recoveryTime: r.recovery_time,
+      lastUsed: r.last_used
     }))
-    return new AccountManager(accounts, u.usage, strategy || 'sticky')
+    return new AccountManager(accounts, usage, strategy || 'sticky')
   }
-
   getAccountCount(): number {
     return this.accounts.length
   }
   getAccounts(): ManagedAccount[] {
     return [...this.accounts]
   }
-
   shouldShowToast(debounce = 30000): boolean {
     if (Date.now() - this.lastToastTime < debounce) return false
     this.lastToastTime = Date.now()
     return true
   }
-
   shouldShowUsageToast(debounce = 30000): boolean {
     if (Date.now() - this.lastUsageToastTime < debounce) return false
     this.lastUsageToastTime = Date.now()
     return true
   }
-
   getMinWaitTime(): number {
     const now = Date.now()
     const waits = this.accounts.map((a) => (a.rateLimitResetTime || 0) - now).filter((t) => t > 0)
     return waits.length > 0 ? Math.min(...waits) : 0
   }
-
   getCurrentOrNext(): ManagedAccount | null {
     const now = Date.now()
     const available = this.accounts.filter((a) => {
@@ -91,9 +108,7 @@ export class AccountManager {
       }
       return !(a.rateLimitResetTime && now < a.rateLimitResetTime)
     })
-
     if (available.length === 0) return null
-
     let selected: ManagedAccount | undefined
     if (this.strategy === 'sticky') {
       selected = available.find((_, i) => i === this.cursor) || available[0]
@@ -105,7 +120,6 @@ export class AccountManager {
         (a, b) => (a.usedCount || 0) - (b.usedCount || 0) || (a.lastUsed || 0) - (b.lastUsed || 0)
       )[0]
     }
-
     if (selected) {
       selected.lastUsed = now
       selected.usedCount = (selected.usedCount || 0) + 1
@@ -114,7 +128,6 @@ export class AccountManager {
     }
     return null
   }
-
   updateUsage(
     id: string,
     meta: { usedCount: number; limitCount: number; realEmail?: string }
@@ -126,30 +139,24 @@ export class AccountManager {
       if (meta.realEmail) a.realEmail = meta.realEmail
     }
     this.usage[id] = { ...meta, lastSync: Date.now() }
+    kiroDb.upsertUsage(id, this.usage[id])
   }
-
   addAccount(a: ManagedAccount): void {
     const i = this.accounts.findIndex((x) => x.id === a.id)
     if (i === -1) this.accounts.push(a)
     else this.accounts[i] = a
+    kiroDb.upsertAccount(a)
   }
-
   removeAccount(a: ManagedAccount): void {
     const removedIndex = this.accounts.findIndex((x) => x.id === a.id)
     if (removedIndex === -1) return
-
     this.accounts = this.accounts.filter((x) => x.id !== a.id)
     delete this.usage[a.id]
-
-    if (this.accounts.length === 0) {
-      this.cursor = 0
-    } else if (this.cursor >= this.accounts.length) {
-      this.cursor = this.accounts.length - 1
-    } else if (removedIndex <= this.cursor && this.cursor > 0) {
-      this.cursor--
-    }
+    kiroDb.deleteAccount(a.id)
+    if (this.accounts.length === 0) this.cursor = 0
+    else if (this.cursor >= this.accounts.length) this.cursor = this.accounts.length - 1
+    else if (removedIndex <= this.cursor && this.cursor > 0) this.cursor--
   }
-
   updateFromAuth(a: ManagedAccount, auth: KiroAuthDetails): void {
     const acc = this.accounts.find((x) => x.id === a.id)
     if (acc) {
@@ -161,31 +168,29 @@ export class AccountManager {
       acc.refreshToken = p.refreshToken
       if (p.profileArn) acc.profileArn = p.profileArn
       if (p.clientId) acc.clientId = p.clientId
+      kiroDb.upsertAccount(acc)
+      writeToKiroCli(acc).catch(() => {})
     }
   }
-
   markRateLimited(a: ManagedAccount, ms: number): void {
     const acc = this.accounts.find((x) => x.id === a.id)
-    if (acc) acc.rateLimitResetTime = Date.now() + ms
+    if (acc) {
+      acc.rateLimitResetTime = Date.now() + ms
+      kiroDb.upsertAccount(acc)
+    }
   }
-
   markUnhealthy(a: ManagedAccount, reason: string, recovery?: number): void {
     const acc = this.accounts.find((x) => x.id === a.id)
     if (acc) {
       acc.isHealthy = false
       acc.unhealthyReason = reason
       acc.recoveryTime = recovery
+      kiroDb.upsertAccount(acc)
     }
   }
-
   async saveToDisk(): Promise<void> {
-    const metadata: AccountMetadata[] = this.accounts.map(
-      ({ usedCount, limitCount, lastUsed, ...rest }) => rest
-    )
-    await saveAccounts({ version: 1, accounts: metadata, activeIndex: this.cursor })
-    await saveUsage({ version: 1, usage: this.usage })
+    for (const a of this.accounts) kiroDb.upsertAccount(a)
   }
-
   toAuthDetails(a: ManagedAccount): KiroAuthDetails {
     const p: RefreshParts = {
       refreshToken: a.refreshToken,

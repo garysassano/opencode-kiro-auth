@@ -1,5 +1,5 @@
-import type { KiroRegion } from '../plugin/types'
 import { KIRO_AUTH_SERVICE, KIRO_CONSTANTS, buildUrl, normalizeRegion } from '../constants'
+import type { KiroRegion } from '../plugin/types'
 
 export interface KiroIDCAuthorization {
   verificationUrl: string

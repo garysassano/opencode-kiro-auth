@@ -2,12 +2,13 @@ import type { KiroAuthDetails, RefreshParts } from '../plugin/types'
 
 export function decodeRefreshToken(refresh: string): RefreshParts {
   const parts = refresh.split('|')
-  if (parts.length < 2) return { refreshToken: parts[0]!, authMethod: 'idc' }
+  if (parts.length < 2) return { refreshToken: parts[0]!, authMethod: 'desktop' }
   const refreshToken = parts[0]!
-  const authMethod = parts[parts.length - 1]!
+  const authMethod = parts[parts.length - 1] as any
   if (authMethod === 'idc')
     return { refreshToken, clientId: parts[1], clientSecret: parts[2], authMethod: 'idc' }
-  return { refreshToken, authMethod: 'idc' }
+  if (authMethod === 'desktop') return { refreshToken, authMethod: 'desktop' }
+  return { refreshToken, authMethod: 'desktop' }
 }
 
 export function accessTokenExpired(auth: KiroAuthDetails, bufferMs = 120000): boolean {
@@ -16,10 +17,15 @@ export function accessTokenExpired(auth: KiroAuthDetails, bufferMs = 120000): bo
 }
 
 export function validateAuthDetails(auth: KiroAuthDetails): boolean {
-  return !!auth.refresh && auth.authMethod === 'idc' && !!auth.clientId && !!auth.clientSecret
+  if (!auth.refresh) return false
+  if (auth.authMethod === 'idc') return !!auth.clientId && !!auth.clientSecret
+  return true
 }
 
 export function encodeRefreshToken(parts: RefreshParts): string {
-  if (!parts.clientId || !parts.clientSecret) throw new Error('Missing credentials')
-  return `${parts.refreshToken}|${parts.clientId}|${parts.clientSecret}|idc`
+  if (parts.authMethod === 'idc') {
+    if (!parts.clientId || !parts.clientSecret) throw new Error('Missing credentials')
+    return `${parts.refreshToken}|${parts.clientId}|${parts.clientSecret}|idc`
+  }
+  return `${parts.refreshToken}|desktop`
 }

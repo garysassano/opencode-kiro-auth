@@ -1,13 +1,13 @@
 import * as crypto from 'crypto'
 import * as os from 'os'
-import type {
-  KiroAuthDetails,
-  PreparedRequest,
-  CodeWhispererMessage,
-  CodeWhispererRequest
-} from './types'
 import { KIRO_CONSTANTS } from '../constants.js'
 import { resolveKiroModel } from './models.js'
+import type {
+  CodeWhispererMessage,
+  CodeWhispererRequest,
+  KiroAuthDetails,
+  PreparedRequest
+} from './types'
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
