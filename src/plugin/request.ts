@@ -22,12 +22,30 @@ function sanitizeHistory(history: CodeWhispererMessage[]): CodeWhispererMessage[
     if (!m) continue
     if (m.assistantResponseMessage?.toolUses) {
       const next = history[i + 1]
-      if (next?.userInputMessage?.userInputMessageContext?.toolResults) result.push(m)
+      if (next?.userInputMessage?.userInputMessageContext?.toolResults) {
+        result.push(m)
+      }
     } else if (m.userInputMessage?.userInputMessageContext?.toolResults) {
       const prev = result[result.length - 1]
-      if (prev?.assistantResponseMessage?.toolUses) result.push(m)
-    } else result.push(m)
+      if (prev?.assistantResponseMessage?.toolUses) {
+        result.push(m)
+      }
+    } else {
+      result.push(m)
+    }
   }
+
+  if (result.length > 0) {
+    const first = result[0]
+    if (
+      !first ||
+      !first.userInputMessage ||
+      first.userInputMessage.userInputMessageContext?.toolResults
+    ) {
+      return []
+    }
+  }
+
   return result
 }
 
@@ -182,6 +200,11 @@ export function transformToCodeWhisperer(
           ? `<thinking>${th}</thinking>\n\n${arm.content}`
           : `<thinking>${th}</thinking>`
       if (tus.length) arm.toolUses = tus
+
+      if (!arm.content && !arm.toolUses) {
+        continue
+      }
+
       history.push({ assistantResponseMessage: arm })
     }
   }
@@ -233,7 +256,10 @@ export function transformToCodeWhisperer(
       arm.content = arm.content
         ? `<thinking>${th}</thinking>\n\n${arm.content}`
         : `<thinking>${th}</thinking>`
-    history.push({ assistantResponseMessage: arm })
+
+    if (arm.content || arm.toolUses) {
+      history.push({ assistantResponseMessage: arm })
+    }
     curContent = 'Continue'
   } else {
     const prev = history[history.length - 1]
