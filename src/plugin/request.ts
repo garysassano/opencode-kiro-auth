@@ -1,6 +1,11 @@
 import * as crypto from 'crypto'
 import * as os from 'os'
 import { KIRO_CONSTANTS } from '../constants.js'
+import {
+  convertImagesToKiroFormat,
+  extractAllImages,
+  extractTextFromParts
+} from './image-handler.js'
 import { resolveKiroModel } from './models.js'
 import type {
   CodeWhispererMessage,
@@ -120,25 +125,29 @@ export function transformToCodeWhisperer(
     if (!m) continue
     if (m.role === 'user') {
       const uim: any = { content: '', modelId: resolved, origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR }
-      const trs: any[] = [],
-        imgs: any[] = []
+      const trs: any[] = []
+
       if (Array.isArray(m.content)) {
+        uim.content = extractTextFromParts(m.content)
+
         for (const p of m.content) {
-          if (p.type === 'text') uim.content += p.text || ''
-          else if (p.type === 'tool_result')
+          if (p.type === 'tool_result') {
             trs.push({
               content: [{ text: truncate(getContentText(p.content || p), toolResultLimit) }],
               status: 'success',
               toolUseId: p.tool_use_id
             })
-          else if (p.type === 'image' && p.source)
-            imgs.push({
-              format: p.source.media_type?.split('/')[1] || 'png',
-              source: { bytes: p.source.data }
-            })
+          }
         }
-      } else uim.content = getContentText(m)
-      if (imgs.length) uim.images = imgs
+
+        const unifiedImages = extractAllImages(m.content)
+        if (unifiedImages.length > 0) {
+          uim.images = convertImagesToKiroFormat(unifiedImages)
+        }
+      } else {
+        uim.content = getContentText(m)
+      }
+
       if (trs.length) uim.userInputMessageContext = { toolResults: deduplicateToolResults(trs) }
       const prev = history[history.length - 1]
       if (prev && prev.userInputMessage)
@@ -224,8 +233,9 @@ export function transformToCodeWhisperer(
   const curMsg = msgs[msgs.length - 1]
   if (!curMsg) throw new Error('Empty')
   let curContent = ''
-  const curTrs: any[] = [],
-    curImgs: any[] = []
+  const curTrs: any[] = []
+  const curImgs: any[] = []
+
   if (curMsg.role === 'assistant') {
     const arm: any = { content: '' }
     let th = ''
@@ -281,19 +291,21 @@ export function transformToCodeWhisperer(
         })
       }
     } else if (Array.isArray(curMsg.content)) {
+      curContent = extractTextFromParts(curMsg.content)
+
       for (const p of curMsg.content) {
-        if (p.type === 'text') curContent += p.text || ''
-        else if (p.type === 'tool_result')
+        if (p.type === 'tool_result') {
           curTrs.push({
             content: [{ text: truncate(getContentText(p.content || p), toolResultLimit) }],
             status: 'success',
             toolUseId: p.tool_use_id
           })
-        else if (p.type === 'image' && p.source)
-          curImgs.push({
-            format: p.source.media_type?.split('/')[1] || 'png',
-            source: { bytes: p.source.data }
-          })
+        }
+      }
+
+      const unifiedImages = extractAllImages(curMsg.content)
+      if (unifiedImages.length > 0) {
+        curImgs.push(...convertImagesToKiroFormat(unifiedImages))
       }
     } else curContent = getContentText(curMsg)
     if (!curContent) curContent = curTrs.length ? 'Tool results provided.' : 'Continue'
