@@ -2,6 +2,8 @@ import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import type { ManagedAccount } from '../types'
+import { deduplicateAccounts, mergeAccounts, withDatabaseLock } from './locked-operations'
 
 function getBaseDir(): string {
   const p = process.platform
@@ -14,7 +16,10 @@ export const DB_PATH = join(getBaseDir(), 'kiro.db')
 
 export class KiroDatabase {
   private db: Database
+  private path: string
+
   constructor(path: string = DB_PATH) {
+    this.path = path
     const dir = join(path, '..')
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     this.db = new Database(path)
@@ -88,7 +93,8 @@ export class KiroDatabase {
   getAccounts(): any[] {
     return this.db.prepare('SELECT * FROM accounts').all()
   }
-  upsertAccount(acc: any) {
+
+  private upsertAccountInternal(acc: any) {
     this.db
       .prepare(
         `
@@ -131,11 +137,82 @@ export class KiroDatabase {
         acc.lastSync || 0
       )
   }
-  deleteAccount(id: string) {
-    this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id)
+
+  async upsertAccount(acc: ManagedAccount): Promise<void> {
+    await withDatabaseLock(this.path, async () => {
+      const existing = this.getAccounts().map(this.rowToAccount)
+      const merged = mergeAccounts(existing, [acc])
+      const deduplicated = deduplicateAccounts(merged)
+
+      this.db.run('BEGIN TRANSACTION')
+      try {
+        for (const account of deduplicated) {
+          this.upsertAccountInternal(account)
+        }
+        this.db.run('COMMIT')
+      } catch (e) {
+        this.db.run('ROLLBACK')
+        throw e
+      }
+    })
   }
+
+  async batchUpsertAccounts(accounts: ManagedAccount[]): Promise<void> {
+    await withDatabaseLock(this.path, async () => {
+      const existing = this.getAccounts().map(this.rowToAccount)
+      const merged = mergeAccounts(existing, accounts)
+      const deduplicated = deduplicateAccounts(merged)
+
+      this.db.run('BEGIN TRANSACTION')
+      try {
+        for (const account of deduplicated) {
+          this.upsertAccountInternal(account)
+        }
+        this.db.run('COMMIT')
+      } catch (e) {
+        this.db.run('ROLLBACK')
+        throw e
+      }
+    })
+  }
+
+  async deleteAccount(id: string): Promise<void> {
+    await withDatabaseLock(this.path, async () => {
+      this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id)
+    })
+  }
+
+  private rowToAccount(row: any): ManagedAccount {
+    return {
+      id: row.id,
+      email: row.email,
+      authMethod: row.auth_method,
+      region: row.region,
+      clientId: row.client_id,
+      clientSecret: row.client_secret,
+      profileArn: row.profile_arn,
+      refreshToken: row.refresh_token,
+      accessToken: row.access_token,
+      expiresAt: row.expires_at,
+      rateLimitResetTime: row.rate_limit_reset,
+      isHealthy: row.is_healthy === 1,
+      unhealthyReason: row.unhealthy_reason,
+      recoveryTime: row.recovery_time,
+      failCount: row.fail_count,
+      lastUsed: row.last_used,
+      usedCount: row.used_count,
+      limitCount: row.limit_count,
+      lastSync: row.last_sync
+    }
+  }
+
   close() {
     this.db.close()
   }
 }
+
+export function createDatabase(path?: string): KiroDatabase {
+  return new KiroDatabase(path)
+}
+
 export const kiroDb = new KiroDatabase()

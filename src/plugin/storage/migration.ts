@@ -28,9 +28,10 @@ export async function migrateJsonToSqlite() {
       const accData = JSON.parse(await fs.readFile(accPath, 'utf-8'))
       const useData = useExists ? JSON.parse(await fs.readFile(usePath, 'utf-8')) : { usage: {} }
       if (accData.accounts && Array.isArray(accData.accounts)) {
+        const accounts = []
         for (const acc of accData.accounts) {
           const usage = useData.usage[acc.id] || {}
-          kiroDb.upsertAccount({
+          accounts.push({
             ...acc,
             email: acc.realEmail || acc.email,
             rateLimitResetTime: acc.rateLimitResetTime || 0,
@@ -42,6 +43,7 @@ export async function migrateJsonToSqlite() {
             lastSync: usage.lastSync || 0
           })
         }
+        await kiroDb.batchUpsertAccounts(accounts)
       }
       await fs.rename(accPath, accPath + '.bak')
       if (useExists) await fs.rename(usePath, usePath + '.bak')

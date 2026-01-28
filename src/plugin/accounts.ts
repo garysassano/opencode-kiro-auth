@@ -135,20 +135,20 @@ export class AccountManager {
       a.limitCount = meta.limitCount
       if (meta.email) a.email = meta.email
       a.failCount = 0
-      kiroDb.upsertAccount(a)
+      kiroDb.upsertAccount(a).catch(() => {})
     }
   }
   addAccount(a: ManagedAccount): void {
     const i = this.accounts.findIndex((x) => x.id === a.id)
     if (i === -1) this.accounts.push(a)
     else this.accounts[i] = a
-    kiroDb.upsertAccount(a)
+    kiroDb.upsertAccount(a).catch(() => {})
   }
   removeAccount(a: ManagedAccount): void {
     const removedIndex = this.accounts.findIndex((x) => x.id === a.id)
     if (removedIndex === -1) return
     this.accounts = this.accounts.filter((x) => x.id !== a.id)
-    kiroDb.deleteAccount(a.id)
+    kiroDb.deleteAccount(a.id).catch(() => {})
     if (this.accounts.length === 0) this.cursor = 0
     else if (this.cursor >= this.accounts.length) this.cursor = this.accounts.length - 1
     else if (removedIndex <= this.cursor && this.cursor > 0) this.cursor--
@@ -165,7 +165,7 @@ export class AccountManager {
       if (p.profileArn) acc.profileArn = p.profileArn
       if (p.clientId) acc.clientId = p.clientId
       acc.failCount = 0
-      kiroDb.upsertAccount(acc)
+      kiroDb.upsertAccount(acc).catch(() => {})
       writeToKiroCli(acc).catch(() => {})
     }
   }
@@ -173,7 +173,7 @@ export class AccountManager {
     const acc = this.accounts.find((x) => x.id === a.id)
     if (acc) {
       acc.rateLimitResetTime = Date.now() + ms
-      kiroDb.upsertAccount(acc)
+      kiroDb.upsertAccount(acc).catch(() => {})
     }
   }
   markUnhealthy(a: ManagedAccount, reason: string, recovery?: number): void {
@@ -186,11 +186,11 @@ export class AccountManager {
         acc.isHealthy = false
         acc.recoveryTime = recovery || Date.now() + 3600000
       }
-      kiroDb.upsertAccount(acc)
+      kiroDb.upsertAccount(acc).catch(() => {})
     }
   }
   async saveToDisk(): Promise<void> {
-    for (const a of this.accounts) kiroDb.upsertAccount(a)
+    await kiroDb.batchUpsertAccounts(this.accounts)
   }
   toAuthDetails(a: ManagedAccount): KiroAuthDetails {
     const p: RefreshParts = {

@@ -222,7 +222,7 @@ export const createKiroPlugin =
                   if (res.ok) {
                     if (acc.failCount && acc.failCount > 0) {
                       acc.failCount = 0
-                      kiroDb.upsertAccount(acc)
+                      kiroDb.upsertAccount(acc).catch(() => {})
                     }
                     if (config.usage_tracking_enabled) {
                       const sync = async (att = 0): Promise<void> => {

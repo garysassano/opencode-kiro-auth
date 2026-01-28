@@ -195,7 +195,7 @@ export async function syncFromKiroCli() {
           if (placeholderId !== id) {
             const placeholderRow = all.find((a) => a.id === placeholderId)
             if (placeholderRow) {
-              kiroDb.upsertAccount({
+              await kiroDb.upsertAccount({
                 id: placeholderId,
                 email: placeholderRow.email,
                 authMethod,
@@ -206,7 +206,8 @@ export async function syncFromKiroCli() {
                 refreshToken: placeholderRow.refresh_token || refreshToken,
                 accessToken: placeholderRow.access_token || accessToken,
                 expiresAt: placeholderRow.expires_at || cliExpiresAt,
-                isHealthy: 0,
+                rateLimitResetTime: 0,
+                isHealthy: false,
                 failCount: 10,
                 unhealthyReason: 'Replaced by real email',
                 recoveryTime: Date.now() + 31536000000,
@@ -218,7 +219,7 @@ export async function syncFromKiroCli() {
           }
         }
 
-        kiroDb.upsertAccount({
+        await kiroDb.upsertAccount({
           id,
           email: resolvedEmail,
           authMethod,
@@ -229,7 +230,8 @@ export async function syncFromKiroCli() {
           refreshToken,
           accessToken,
           expiresAt: cliExpiresAt,
-          isHealthy: 1,
+          rateLimitResetTime: 0,
+          isHealthy: true,
           failCount: 0,
           usedCount,
           limitCount,
