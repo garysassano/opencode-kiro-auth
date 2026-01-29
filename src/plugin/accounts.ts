@@ -141,6 +141,9 @@ export class AccountManager {
       if (meta.email) a.email = meta.email
       if (!isPermanentError(a.unhealthyReason)) {
         a.failCount = 0
+        a.isHealthy = true
+        delete a.unhealthyReason
+        delete a.recoveryTime
       }
       kiroDb.upsertAccount(a).catch(() => {})
     }

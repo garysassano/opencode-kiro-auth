@@ -38,6 +38,9 @@ export class KiroDatabase {
         used_count INTEGER DEFAULT 0, limit_count INTEGER DEFAULT 0, last_sync INTEGER DEFAULT 0
       )
     `)
+
+    this.migrateToUniqueRefreshToken()
+
     const columns = this.db.prepare('PRAGMA table_info(accounts)').all() as any[]
     const names = new Set(columns.map((c) => c.name))
     if (names.has('real_email')) {
@@ -90,6 +93,72 @@ export class KiroDatabase {
       this.db.run('DROP TABLE usage')
     }
   }
+
+  private migrateToUniqueRefreshToken() {
+    const hasIndex = this.db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_refresh_token_unique'"
+      )
+      .get()
+
+    if (hasIndex) return
+
+    this.db.run('BEGIN TRANSACTION')
+    try {
+      const duplicates = this.db
+        .prepare(
+          `
+        SELECT refresh_token, COUNT(*) as count 
+        FROM accounts 
+        GROUP BY refresh_token 
+        HAVING count > 1
+      `
+        )
+        .all() as any[]
+
+      for (const dup of duplicates) {
+        const accounts = this.db
+          .prepare(
+            'SELECT * FROM accounts WHERE refresh_token = ? ORDER BY last_used DESC, expires_at DESC'
+          )
+          .all(dup.refresh_token) as any[]
+
+        if (accounts.length > 1) {
+          const keep = accounts[0]
+          const remove = accounts.slice(1)
+
+          const mergedUsedCount = Math.max(...accounts.map((a: any) => a.used_count || 0))
+          const mergedLimitCount = Math.max(...accounts.map((a: any) => a.limit_count || 0))
+          const mergedLastUsed = Math.max(...accounts.map((a: any) => a.last_used || 0))
+          const mergedFailCount = Math.max(...accounts.map((a: any) => a.fail_count || 0))
+
+          this.db
+            .prepare(
+              `
+            UPDATE accounts SET 
+              used_count = ?, 
+              limit_count = ?, 
+              last_used = ?,
+              fail_count = ?
+            WHERE id = ?
+          `
+            )
+            .run(mergedUsedCount, mergedLimitCount, mergedLastUsed, mergedFailCount, keep.id)
+
+          for (const acc of remove) {
+            this.db.prepare('DELETE FROM accounts WHERE id = ?').run(acc.id)
+          }
+        }
+      }
+
+      this.db.run('CREATE UNIQUE INDEX idx_refresh_token_unique ON accounts(refresh_token)')
+      this.db.run('COMMIT')
+    } catch (e) {
+      this.db.run('ROLLBACK')
+      throw e
+    }
+  }
+
   getAccounts(): any[] {
     return this.db.prepare('SELECT * FROM accounts').all()
   }
@@ -104,11 +173,10 @@ export class KiroDatabase {
         is_healthy, unhealthy_reason, recovery_time, fail_count, last_used,
         used_count, limit_count, last_sync
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        email=excluded.email, auth_method=excluded.auth_method,
+      ON CONFLICT(refresh_token) DO UPDATE SET
+        id=excluded.id, email=excluded.email, auth_method=excluded.auth_method,
         region=excluded.region, client_id=excluded.client_id, client_secret=excluded.client_secret,
-        profile_arn=excluded.profile_arn, refresh_token=excluded.refresh_token,
-        access_token=excluded.access_token, expires_at=excluded.expires_at,
+        profile_arn=excluded.profile_arn, access_token=excluded.access_token, expires_at=excluded.expires_at,
         rate_limit_reset=excluded.rate_limit_reset, is_healthy=excluded.is_healthy,
         unhealthy_reason=excluded.unhealthy_reason, recovery_time=excluded.recovery_time,
         fail_count=excluded.fail_count, last_used=excluded.last_used,

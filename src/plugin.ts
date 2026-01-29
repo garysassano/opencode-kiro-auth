@@ -224,6 +224,9 @@ export const createKiroPlugin =
                     if (acc.failCount && acc.failCount > 0) {
                       if (!isPermanentError(acc.unhealthyReason)) {
                         acc.failCount = 0
+                        acc.isHealthy = true
+                        delete acc.unhealthyReason
+                        delete acc.recoveryTime
                         kiroDb.upsertAccount(acc).catch(() => {})
                       }
                     }
@@ -353,7 +356,7 @@ export const createKiroPlugin =
                     am.markRateLimited(acc, w)
                     await am.saveToDisk()
                     if (count > 1) {
-                      showToast(`Rate limited. Switching account...`, 'warning')
+                      showToast(`Rate limited (${acc.email}). Switching account...`, 'warning')
                       continue
                     }
                     showToast(`Rate limited. Waiting ${Math.ceil(w / 1000)}s...`, 'warning')
@@ -384,7 +387,7 @@ export const createKiroPlugin =
                     }
                     am.markUnhealthy(acc, errorReason)
                     await am.saveToDisk()
-                    showToast(`${errorReason}. Switching account...`, 'warning')
+                    showToast(`${errorReason} (${acc.email}). Switching account...`, 'warning')
                     continue
                   }
                   const h: any = {}
