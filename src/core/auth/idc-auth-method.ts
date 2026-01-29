@@ -48,9 +48,15 @@ export class IdcAuthMethod {
   private async handleMultipleLogin(region: KiroRegion, resolve: any): Promise<void> {
     const accounts: KiroIDCTokenResult[] = []
     let startFresh = true
-    const existingAccounts = await this.repository.findAll()
-    const idcAccs = existingAccounts.filter((a) => a.authMethod === 'idc')
-    if (idcAccs.length > 0) {
+
+    while (true) {
+      const existingAccounts = await this.repository.findAll()
+      const idcAccs = existingAccounts.filter((a) => a.authMethod === 'idc')
+
+      if (idcAccs.length === 0) {
+        break
+      }
+
       const existingAccountsList = idcAccs.map((acc, idx) => ({
         email: acc.email,
         index: idx
@@ -58,25 +64,29 @@ export class IdcAuthMethod {
       const mode = await promptLoginMode(existingAccountsList)
 
       if (mode === 'delete') {
-        const deleteIndex = await promptDeleteAccount(existingAccountsList)
-        if (deleteIndex !== null && idcAccs[deleteIndex]) {
-          const accToDelete = idcAccs[deleteIndex]
-          await this.repository.delete(accToDelete.id)
-          console.log(`\n[Success] Deleted: ${accToDelete.email}\n`)
+        const deleteIndices = await promptDeleteAccount(existingAccountsList)
+        if (deleteIndices !== null && deleteIndices.length > 0) {
+          for (const idx of deleteIndices) {
+            const accToDelete = idcAccs[idx]
+            if (accToDelete) {
+              await this.repository.delete(accToDelete.id)
+              console.log(`[Success] Deleted: ${accToDelete.email}`)
+            }
+          }
+          console.log(`\n[Success] Deleted ${deleteIndices.length} account(s)\n`)
         }
-        const finalAccounts = await this.repository.findAll()
-        return resolve({
-          url: '',
-          instructions: `Complete (${finalAccounts.length} accounts).`,
-          method: 'auto',
-          callback: async () => ({
-            type: 'success',
-            key: finalAccounts[0]?.accessToken || ''
-          })
-        })
+        continue
       }
 
-      startFresh = mode === 'fresh'
+      if (mode === 'add') {
+        startFresh = false
+        break
+      }
+
+      if (mode === 'fresh') {
+        startFresh = true
+        break
+      }
     }
     while (true) {
       try {

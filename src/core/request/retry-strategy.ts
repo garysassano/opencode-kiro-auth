@@ -9,23 +9,19 @@ interface RetryContext {
 }
 
 export class RetryStrategy {
-  constructor(
-    private config: RetryConfig,
-    private maxIterations: number,
-    private timeoutMs: number
-  ) {}
+  constructor(private config: RetryConfig) {}
 
   shouldContinue(context: RetryContext): { canContinue: boolean; error?: string } {
     context.iterations++
 
-    if (context.iterations > this.maxIterations) {
+    if (context.iterations > this.config.max_request_iterations) {
       return {
         canContinue: false,
-        error: `Exceeded max iterations (${this.maxIterations})`
+        error: `Exceeded max iterations (${this.config.max_request_iterations})`
       }
     }
 
-    if (Date.now() - context.startTime > this.timeoutMs) {
+    if (Date.now() - context.startTime > this.config.request_timeout_ms) {
       return {
         canContinue: false,
         error: 'Request timeout'

@@ -11,6 +11,7 @@ interface RequestContext {
 
 interface ErrorHandlerConfig {
   rate_limit_max_retries: number
+  rate_limit_retry_delay_ms: number
 }
 
 export class ErrorHandler {
@@ -131,7 +132,7 @@ export class ErrorHandler {
     showToast: ToastFunction
   ): Promise<{ shouldRetry: boolean; newContext?: RequestContext }> {
     if (this.isNetworkError(error) && context.retry < this.config.rate_limit_max_retries) {
-      const d = 5000 * Math.pow(2, context.retry)
+      const d = this.config.rate_limit_retry_delay_ms * Math.pow(2, context.retry)
       showToast(`Network error. Retrying in ${Math.ceil(d / 1000)}s...`, 'warning')
       await this.sleep(d)
       return {

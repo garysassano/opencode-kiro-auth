@@ -12,10 +12,12 @@ export async function promptAddAnotherAccount(currentCount: number): Promise<boo
   }
 }
 
-export async function promptDeleteAccount(accounts: ExistingAccountInfo[]): Promise<number | null> {
+export async function promptDeleteAccount(
+  accounts: ExistingAccountInfo[]
+): Promise<number[] | null> {
   const rl = createInterface({ input, output })
   try {
-    console.log(`\nSelect account to delete:`)
+    console.log(`\nSelect account(s) to delete:`)
     for (const acc of accounts) {
       const label = acc.email || `Account ${acc.index + 1}`
       console.log(`  ${acc.index + 1}. ${label}`)
@@ -24,26 +26,63 @@ export async function promptDeleteAccount(accounts: ExistingAccountInfo[]): Prom
     console.log('')
 
     while (true) {
-      const answer = await rl.question('Enter account number: ')
-      const num = parseInt(answer.trim(), 10)
+      const answer = await rl.question('Enter account number(s) (e.g., 1,2,3 or 1): ')
+      const trimmed = answer.trim()
 
-      if (num === 0) {
+      if (trimmed === '0') {
         return null
       }
 
-      if (num >= 1 && num <= accounts.length) {
-        const selected = accounts[num - 1]
-        const label = selected?.email || `Account ${num}`
-        const confirm = await rl.question(`Delete "${label}"? (y/n): `)
-        const normalized = confirm.trim().toLowerCase()
+      const parts = trimmed.split(',').map((s) => s.trim())
+      const numbers: number[] = []
+      let invalid = false
 
-        if (normalized === 'y' || normalized === 'yes') {
-          return selected?.index ?? null
+      for (const part of parts) {
+        const num = parseInt(part, 10)
+        if (isNaN(num) || num < 1 || num > accounts.length) {
+          invalid = true
+          break
         }
-        return null
+        if (!numbers.includes(num)) {
+          numbers.push(num)
+        }
       }
 
-      console.log(`Please enter a number between 0 and ${accounts.length}`)
+      if (invalid) {
+        console.log(
+          `Please enter valid numbers between 1 and ${accounts.length}, separated by commas`
+        )
+        continue
+      }
+
+      if (numbers.length === 0) {
+        console.log(`Please enter at least one account number`)
+        continue
+      }
+
+      const indices = numbers.map((n) => n - 1)
+      const selectedAccounts = indices
+        .map((i) => accounts[i])
+        .filter((acc): acc is ExistingAccountInfo => acc !== undefined)
+
+      if (selectedAccounts.length === 0) {
+        console.log(`No valid accounts selected`)
+        continue
+      }
+
+      console.log(`\nYou are about to delete ${selectedAccounts.length} account(s):`)
+      for (const acc of selectedAccounts) {
+        const label = acc.email || `Account ${acc.index + 1}`
+        console.log(`  - ${label}`)
+      }
+
+      const confirm = await rl.question(`\nConfirm deletion? (y/n): `)
+      const normalized = confirm.trim().toLowerCase()
+
+      if (normalized === 'y' || normalized === 'yes') {
+        return selectedAccounts.map((acc) => acc.index)
+      }
+      return null
     }
   } finally {
     rl.close()

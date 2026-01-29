@@ -35,11 +35,7 @@ export class RequestHandler {
     this.errorHandler = new ErrorHandler(config, accountManager, repository)
     this.responseHandler = new ResponseHandler()
     this.usageTracker = new UsageTracker(config, accountManager, repository)
-    this.retryStrategy = new RetryStrategy(
-      config,
-      config.max_request_iterations,
-      config.request_timeout_ms
-    )
+    this.retryStrategy = new RetryStrategy(config)
   }
 
   async handle(input: any, init: any, showToast: ToastFunction): Promise<Response> {
@@ -64,6 +60,7 @@ export class RequestHandler {
 
     let reductionFactor = 1.0
     let retry = 0
+    let consecutiveNullAccounts = 0
     const retryContext = this.retryStrategy.createContext()
 
     while (true) {
@@ -72,16 +69,25 @@ export class RequestHandler {
         throw new Error(check.error)
       }
 
+      if (this.allAccountsPermanentlyUnhealthy()) {
+        throw new Error('All accounts are permanently unhealthy (quota exceeded or suspended)')
+      }
+
       let acc = await this.accountSelector.selectHealthyAccount(showToast)
       if (!acc) {
+        consecutiveNullAccounts++
+        const backoffDelay = Math.min(1000 * Math.pow(2, consecutiveNullAccounts - 1), 10000)
+        await this.sleep(backoffDelay)
         continue
       }
 
+      consecutiveNullAccounts = 0
       const auth = this.accountManager.toAuthDetails(acc)
 
       const tokenResult = await this.tokenRefresher.refreshIfNeeded(acc, auth, showToast)
       if (tokenResult.shouldContinue) {
         acc = tokenResult.account
+        await this.sleep(500)
         continue
       }
 
@@ -251,5 +257,17 @@ export class RequestHandler {
         logger.getTimestamp()
       )
     }
+  }
+
+  private allAccountsPermanentlyUnhealthy(): boolean {
+    const accounts = this.accountManager.getAccounts()
+    if (accounts.length === 0) {
+      return false
+    }
+    return accounts.every((acc) => !acc.isHealthy && isPermanentError(acc.unhealthyReason))
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 }

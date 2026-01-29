@@ -11,6 +11,8 @@ interface AccountSelectorConfig {
 
 export class AccountSelector {
   private triedEmptySync = false
+  private circuitBreakerTrips = 0
+  private lastCircuitBreakerReset = Date.now()
 
   constructor(
     private accountManager: AccountManager,
@@ -20,6 +22,8 @@ export class AccountSelector {
   ) {}
 
   async selectHealthyAccount(showToast: ToastFunction): Promise<ManagedAccount | null> {
+    this.checkCircuitBreaker()
+
     let count = this.accountManager.getAccountCount()
 
     if (count === 0 && this.config.auto_sync_kiro_cli && !this.triedEmptySync) {
@@ -35,6 +39,7 @@ export class AccountSelector {
     let acc = this.accountManager.getCurrentOrNext()
 
     if (!acc) {
+      this.circuitBreakerTrips++
       const wait = this.accountManager.getMinWaitTime()
       if (wait > 0 && wait < 30000) {
         if (this.accountManager.shouldShowToast()) {
@@ -45,6 +50,8 @@ export class AccountSelector {
       }
       throw new Error('All accounts are unhealthy or rate-limited')
     }
+
+    this.resetCircuitBreaker()
 
     if (this.accountManager.shouldShowToast()) {
       showToast(
@@ -83,6 +90,24 @@ export class AccountSelector {
       return `Usage (${email}): ${usedCount}/${limitCount} (${percentage}%)`
     }
     return `Usage (${email}): ${usedCount}`
+  }
+
+  private checkCircuitBreaker(): void {
+    if (Date.now() - this.lastCircuitBreakerReset > 60000) {
+      this.circuitBreakerTrips = 0
+      this.lastCircuitBreakerReset = Date.now()
+    }
+
+    if (this.circuitBreakerTrips >= 10) {
+      throw new Error('Circuit breaker tripped: Too many consecutive failures selecting accounts')
+    }
+  }
+
+  private resetCircuitBreaker(): void {
+    if (this.circuitBreakerTrips > 0) {
+      this.circuitBreakerTrips = 0
+      this.lastCircuitBreakerReset = Date.now()
+    }
   }
 
   private sleep(ms: number): Promise<void> {
