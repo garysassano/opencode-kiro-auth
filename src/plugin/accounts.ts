@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth'
 import { isPermanentError } from './health'
 import * as logger from './logger'
@@ -10,10 +10,6 @@ import type {
   ManagedAccount,
   RefreshParts
 } from './types'
-
-export function generateAccountId(): string {
-  return randomBytes(16).toString('hex')
-}
 
 export function createDeterministicAccountId(
   email: string,

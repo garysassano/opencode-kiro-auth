@@ -43,12 +43,6 @@ export interface ManagedAccount {
   lastUsed?: number
 }
 
-export interface UsageMetadata {
-  usedCount: number
-  limitCount: number
-  lastSync: number
-}
-
 export interface CodeWhispererMessage {
   userInputMessage?: {
     content: string
@@ -113,12 +107,3 @@ export interface PreparedRequest {
 }
 
 export type AccountSelectionStrategy = 'sticky' | 'round-robin' | 'lowest-usage'
-
-export interface StreamEvent {
-  type: string
-  message?: any
-  content_block?: any
-  delta?: any
-  index?: number
-  usage?: any
-}

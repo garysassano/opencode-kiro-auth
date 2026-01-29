@@ -16,12 +16,6 @@ export function accessTokenExpired(auth: KiroAuthDetails, bufferMs = 120000): bo
   return Date.now() >= auth.expires - bufferMs
 }
 
-export function validateAuthDetails(auth: KiroAuthDetails): boolean {
-  if (!auth.refresh) return false
-  if (auth.authMethod === 'idc') return !!auth.clientId && !!auth.clientSecret
-  return true
-}
-
 export function encodeRefreshToken(parts: RefreshParts): string {
   if (parts.authMethod === 'idc') {
     if (!parts.clientId || !parts.clientSecret) throw new Error('Missing credentials')

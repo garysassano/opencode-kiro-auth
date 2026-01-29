@@ -2,71 +2,28 @@ import * as crypto from 'crypto'
 import * as os from 'os'
 import { KIRO_CONSTANTS } from '../constants.js'
 import {
+  buildHistory,
+  extractToolNamesFromHistory,
+  historyHasToolCalling,
+  truncateHistory
+} from '../infrastructure/transformers/history-builder.js'
+import {
+  findOriginalToolCall,
+  getContentText,
+  mergeAdjacentMessages,
+  truncate
+} from '../infrastructure/transformers/message-transformer.js'
+import {
+  convertToolsToCodeWhisperer,
+  deduplicateToolResults
+} from '../infrastructure/transformers/tool-transformer.js'
+import {
   convertImagesToKiroFormat,
   extractAllImages,
   extractTextFromParts
 } from './image-handler.js'
 import { resolveKiroModel } from './models.js'
-import type {
-  CodeWhispererMessage,
-  CodeWhispererRequest,
-  KiroAuthDetails,
-  PreparedRequest
-} from './types'
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s
-  const half = Math.floor(max / 2)
-  return s.substring(0, half) + '\n... [TRUNCATED] ...\n' + s.substring(s.length - half)
-}
-
-function sanitizeHistory(history: CodeWhispererMessage[]): CodeWhispererMessage[] {
-  const result: CodeWhispererMessage[] = []
-  for (let i = 0; i < history.length; i++) {
-    const m = history[i]
-    if (!m) continue
-    if (m.assistantResponseMessage?.toolUses) {
-      const next = history[i + 1]
-      if (next?.userInputMessage?.userInputMessageContext?.toolResults) {
-        result.push(m)
-      }
-    } else if (m.userInputMessage?.userInputMessageContext?.toolResults) {
-      const prev = result[result.length - 1]
-      if (prev?.assistantResponseMessage?.toolUses) {
-        result.push(m)
-      }
-    } else {
-      result.push(m)
-    }
-  }
-
-  if (result.length > 0) {
-    const first = result[0]
-    if (
-      !first ||
-      !first.userInputMessage ||
-      first.userInputMessage.userInputMessageContext?.toolResults
-    ) {
-      return []
-    }
-  }
-
-  return result
-}
-
-function findOriginalToolCall(msgs: any[], toolUseId: string): any | null {
-  for (const m of msgs) {
-    if (m.role === 'assistant') {
-      if (m.tool_calls) {
-        for (const tc of m.tool_calls) if (tc.id === toolUseId) return tc
-      }
-      if (Array.isArray(m.content)) {
-        for (const p of m.content) if (p.type === 'tool_use' && p.id === toolUseId) return p
-      }
-    }
-  }
-  return null
-}
+import type { CodeWhispererRequest, KiroAuthDetails, PreparedRequest } from './types'
 
 export function transformToCodeWhisperer(
   url: string,
@@ -91,145 +48,10 @@ export function transformToCodeWhisperer(
   const lastMsg = msgs[msgs.length - 1]
   if (lastMsg && lastMsg.role === 'assistant' && getContentText(lastMsg) === '{') msgs.pop()
   const cwTools = tools ? convertToolsToCodeWhisperer(tools) : []
-  let history: CodeWhispererMessage[] = []
-  let firstUserIndex = -1
-  for (let i = 0; i < msgs.length; i++) {
-    if (msgs[i].role === 'user') {
-      firstUserIndex = i
-      break
-    }
-  }
-  if (sys) {
-    if (firstUserIndex !== -1) {
-      const m = msgs[firstUserIndex]
-      const oldContent = getContentText(m)
-      if (Array.isArray(m.content)) {
-        m.content = [
-          { type: 'text', text: `${sys}\n\n${oldContent}` },
-          ...m.content.filter((p: any) => p.type !== 'text')
-        ]
-      } else m.content = `${sys}\n\n${oldContent}`
-    } else {
-      history.push({
-        userInputMessage: {
-          content: sys,
-          modelId: resolved,
-          origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR
-        }
-      })
-    }
-  }
   const toolResultLimit = Math.floor(250000 * reductionFactor)
-  for (let i = 0; i < msgs.length - 1; i++) {
-    const m = msgs[i]
-    if (!m) continue
-    if (m.role === 'user') {
-      const uim: any = { content: '', modelId: resolved, origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR }
-      const trs: any[] = []
-
-      if (Array.isArray(m.content)) {
-        uim.content = extractTextFromParts(m.content)
-
-        for (const p of m.content) {
-          if (p.type === 'tool_result') {
-            trs.push({
-              content: [{ text: truncate(getContentText(p.content || p), toolResultLimit) }],
-              status: 'success',
-              toolUseId: p.tool_use_id
-            })
-          }
-        }
-
-        const unifiedImages = extractAllImages(m.content)
-        if (unifiedImages.length > 0) {
-          uim.images = convertImagesToKiroFormat(unifiedImages)
-        }
-      } else {
-        uim.content = getContentText(m)
-      }
-
-      if (trs.length) uim.userInputMessageContext = { toolResults: deduplicateToolResults(trs) }
-      const prev = history[history.length - 1]
-      if (prev && prev.userInputMessage)
-        history.push({ assistantResponseMessage: { content: 'Continue' } })
-      history.push({ userInputMessage: uim })
-    } else if (m.role === 'tool') {
-      const trs: any[] = []
-      if (m.tool_results) {
-        for (const tr of m.tool_results)
-          trs.push({
-            content: [{ text: truncate(getContentText(tr), toolResultLimit) }],
-            status: 'success',
-            toolUseId: tr.tool_call_id
-          })
-      } else {
-        trs.push({
-          content: [{ text: truncate(getContentText(m), toolResultLimit) }],
-          status: 'success',
-          toolUseId: m.tool_call_id
-        })
-      }
-      const prev = history[history.length - 1]
-      if (prev && prev.userInputMessage)
-        history.push({ assistantResponseMessage: { content: 'Continue' } })
-      history.push({
-        userInputMessage: {
-          content: 'Tool results provided.',
-          modelId: resolved,
-          origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
-          userInputMessageContext: { toolResults: deduplicateToolResults(trs) }
-        }
-      })
-    } else if (m.role === 'assistant') {
-      const arm: any = { content: '' }
-      const tus: any[] = []
-      let th = ''
-      if (Array.isArray(m.content)) {
-        for (const p of m.content) {
-          if (p.type === 'text') arm.content += p.text || ''
-          else if (p.type === 'thinking') th += p.thinking || p.text || ''
-          else if (p.type === 'tool_use')
-            tus.push({ input: p.input, name: p.name, toolUseId: p.id })
-        }
-      } else arm.content = getContentText(m)
-      if (m.tool_calls && Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) {
-          tus.push({
-            input:
-              typeof tc.function?.arguments === 'string'
-                ? JSON.parse(tc.function.arguments)
-                : tc.function?.arguments,
-            name: tc.function?.name,
-            toolUseId: tc.id
-          })
-        }
-      }
-      if (th)
-        arm.content = arm.content
-          ? `<thinking>${th}</thinking>\n\n${arm.content}`
-          : `<thinking>${th}</thinking>`
-      if (tus.length) arm.toolUses = tus
-
-      if (!arm.content && !arm.toolUses) {
-        continue
-      }
-
-      history.push({ assistantResponseMessage: arm })
-    }
-  }
-  history = sanitizeHistory(history)
-  let historySize = JSON.stringify(history).length
+  let history = buildHistory(msgs, resolved, sys, toolResultLimit)
   const historyLimit = Math.floor(850000 * reductionFactor)
-  while (historySize > historyLimit && history.length > 2) {
-    history.shift()
-    while (history.length > 0) {
-      const first = history[0]
-      if (first && first.userInputMessage) break
-      history.shift()
-    }
-    history = sanitizeHistory(history)
-    historySize = JSON.stringify(history).length
-  }
+  history = truncateHistory(history, historyLimit)
   const curMsg = msgs[msgs.length - 1]
   if (!curMsg) throw new Error('Empty')
   let curContent = ''
@@ -432,87 +254,4 @@ export function transformToCodeWhisperer(
     effectiveModel: resolved,
     conversationId: convId
   }
-}
-
-export function mergeAdjacentMessages(msgs: any[]): any[] {
-  const merged: any[] = []
-  for (const m of msgs) {
-    if (!merged.length) merged.push({ ...m })
-    else {
-      const last = merged[merged.length - 1]
-      if (last && m.role === last.role) {
-        if (Array.isArray(last.content) && Array.isArray(m.content)) last.content.push(...m.content)
-        else if (typeof last.content === 'string' && typeof m.content === 'string')
-          last.content += '\n' + m.content
-        else if (Array.isArray(last.content) && typeof m.content === 'string')
-          last.content.push({ type: 'text', text: m.content })
-        else if (typeof last.content === 'string' && Array.isArray(m.content))
-          last.content = [{ type: 'text', text: last.content }, ...m.content]
-        if (m.tool_calls) {
-          if (!last.tool_calls) last.tool_calls = []
-          last.tool_calls.push(...m.tool_calls)
-        }
-        if (m.role === 'tool') {
-          if (!last.tool_results)
-            last.tool_results = [{ content: last.content, tool_call_id: last.tool_call_id }]
-          last.tool_results.push({ content: m.content, tool_call_id: m.tool_call_id })
-        }
-      } else merged.push({ ...m })
-    }
-  }
-  return merged
-}
-
-export function convertToolsToCodeWhisperer(tools: any[]): any[] {
-  return tools.map((t) => ({
-    toolSpecification: {
-      name: t.name || t.function?.name,
-      description: (t.description || t.function?.description || '').substring(0, 9216),
-      inputSchema: { json: t.input_schema || t.function?.parameters || {} }
-    }
-  }))
-}
-
-function getContentText(m: any): string {
-  if (!m) return ''
-  if (typeof m === 'string') return m
-  if (typeof m.content === 'string') return m.content
-  if (Array.isArray(m.content))
-    return m.content
-      .filter((p: any) => p.type === 'text')
-      .map((p: any) => p.text || '')
-      .join('')
-  return m.text || ''
-}
-
-function deduplicateToolResults(trs: any[]): any[] {
-  const u: any[] = [],
-    s = new Set()
-  for (const t of trs) {
-    if (!s.has(t.toolUseId)) {
-      s.add(t.toolUseId)
-      u.push(t)
-    }
-  }
-  return u
-}
-
-function historyHasToolCalling(history: CodeWhispererMessage[]): boolean {
-  return history.some(
-    (h) =>
-      h.assistantResponseMessage?.toolUses ||
-      h.userInputMessage?.userInputMessageContext?.toolResults
-  )
-}
-
-function extractToolNamesFromHistory(history: CodeWhispererMessage[]): Set<string> {
-  const toolNames = new Set<string>()
-  for (const h of history) {
-    if (h.assistantResponseMessage?.toolUses) {
-      for (const tu of h.assistantResponseMessage.toolUses) {
-        if (tu.name) toolNames.add(tu.name)
-      }
-    }
-  }
-  return toolNames
 }
