@@ -3,7 +3,7 @@ import type { AccountRepository } from '../../infrastructure/database/account-re
 import type { KiroIDCTokenResult } from '../../kiro/oauth-idc.js'
 import { authorizeKiroIDC } from '../../kiro/oauth-idc.js'
 import { createDeterministicAccountId } from '../../plugin/accounts.js'
-import { promptAddAnotherAccount, promptLoginMode } from '../../plugin/cli.js'
+import { promptAddAnotherAccount, promptDeleteAccount, promptLoginMode } from '../../plugin/cli.js'
 import * as logger from '../../plugin/logger.js'
 import { startIDCAuthServer } from '../../plugin/server.js'
 import type { KiroRegion, ManagedAccount } from '../../plugin/types.js'
@@ -55,7 +55,28 @@ export class IdcAuthMethod {
         email: acc.email,
         index: idx
       }))
-      startFresh = (await promptLoginMode(existingAccountsList)) === 'fresh'
+      const mode = await promptLoginMode(existingAccountsList)
+
+      if (mode === 'delete') {
+        const deleteIndex = await promptDeleteAccount(existingAccountsList)
+        if (deleteIndex !== null && idcAccs[deleteIndex]) {
+          const accToDelete = idcAccs[deleteIndex]
+          await this.repository.delete(accToDelete.id)
+          console.log(`\n[Success] Deleted: ${accToDelete.email}\n`)
+        }
+        const finalAccounts = await this.repository.findAll()
+        return resolve({
+          url: '',
+          instructions: `Complete (${finalAccounts.length} accounts).`,
+          method: 'auto',
+          callback: async () => ({
+            type: 'success',
+            key: finalAccounts[0]?.accessToken || ''
+          })
+        })
+      }
+
+      startFresh = mode === 'fresh'
     }
     while (true) {
       try {
@@ -121,7 +142,7 @@ export class IdcAuthMethod {
       method: 'auto',
       callback: async () => ({
         type: 'success',
-        key: finalAccounts[0]?.accessToken
+        key: finalAccounts[0]?.accessToken || ''
       })
     })
   }
