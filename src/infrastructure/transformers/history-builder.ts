@@ -11,37 +11,9 @@ import { deduplicateToolResults } from './tool-transformer.js'
 export function buildHistory(
   msgs: any[],
   resolved: string,
-  system: string | undefined,
   toolResultLimit: number
 ): CodeWhispererMessage[] {
   let history: CodeWhispererMessage[] = []
-  let firstUserIndex = -1
-  for (let i = 0; i < msgs.length; i++) {
-    if (msgs[i].role === 'user') {
-      firstUserIndex = i
-      break
-    }
-  }
-  if (system) {
-    if (firstUserIndex !== -1) {
-      const m = msgs[firstUserIndex]
-      const oldContent = getContentText(m)
-      if (Array.isArray(m.content)) {
-        m.content = [
-          { type: 'text', text: `${system}\n\n${oldContent}` },
-          ...m.content.filter((p: any) => p.type !== 'text')
-        ]
-      } else m.content = `${system}\n\n${oldContent}`
-    } else {
-      history.push({
-        userInputMessage: {
-          content: system,
-          modelId: resolved,
-          origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR
-        }
-      })
-    }
-  }
   for (let i = 0; i < msgs.length - 1; i++) {
     const m = msgs[i]
     if (!m) continue
@@ -138,6 +110,28 @@ export function buildHistory(
 
       history.push({ assistantResponseMessage: arm })
     }
+  }
+  return history
+}
+
+export function injectSystemPrompt(
+  history: CodeWhispererMessage[],
+  system: string | undefined,
+  resolved: string
+): CodeWhispererMessage[] {
+  if (!system) return history
+  const firstUserMsg = history.find((h) => !!h.userInputMessage)
+  if (firstUserMsg && firstUserMsg.userInputMessage) {
+    const oldContent = firstUserMsg.userInputMessage.content || ''
+    firstUserMsg.userInputMessage.content = `${system}\n\n${oldContent}`
+  } else {
+    history.unshift({
+      userInputMessage: {
+        content: system,
+        modelId: resolved,
+        origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR
+      }
+    })
   }
   return history
 }
