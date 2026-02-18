@@ -19,6 +19,7 @@ export class AccountRepository {
       clientId: r.client_id,
       clientSecret: r.client_secret,
       profileArn: r.profile_arn,
+      startUrl: r.start_url || undefined,
       refreshToken: r.refresh_token,
       accessToken: r.access_token,
       expiresAt: r.expires_at,

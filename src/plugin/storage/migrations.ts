@@ -4,6 +4,7 @@ export function runMigrations(db: Database): void {
   migrateToUniqueRefreshToken(db)
   migrateRealEmailColumn(db)
   migrateUsageTable(db)
+  migrateStartUrlColumn(db)
 }
 
 function migrateToUniqueRefreshToken(db: Database): void {
@@ -123,5 +124,13 @@ function migrateUsageTable(db: Database): void {
           last_sync = COALESCE((SELECT last_sync FROM usage WHERE usage.account_id = accounts.id), last_sync)
       `)
     db.run('DROP TABLE usage')
+  }
+}
+
+function migrateStartUrlColumn(db: Database): void {
+  const columns = db.prepare('PRAGMA table_info(accounts)').all() as any[]
+  const names = new Set(columns.map((c) => c.name))
+  if (!names.has('start_url')) {
+    db.run('ALTER TABLE accounts ADD COLUMN start_url TEXT')
   }
 }

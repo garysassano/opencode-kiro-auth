@@ -1,3 +1,4 @@
+import type { AuthHook } from '@opencode-ai/plugin'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
 import { IdcAuthMethod } from './idc-auth-method.js'
 
@@ -21,12 +22,7 @@ export class AuthHandler {
     this.accountManager = am
   }
 
-  getMethods(): Array<{
-    id: string
-    label: string
-    type: 'oauth'
-    authorize: (inputs?: any) => Promise<any>
-  }> {
+  getMethods(): AuthHook['methods'] {
     if (!this.accountManager) {
       return []
     }
@@ -35,9 +31,25 @@ export class AuthHandler {
 
     return [
       {
-        id: 'idc',
-        label: 'AWS Builder ID (IDC)',
-        type: 'oauth',
+        label: 'AWS Builder ID / IAM Identity Center',
+        type: 'oauth' as const,
+        prompts: [
+          {
+            type: 'text' as const,
+            key: 'start_url',
+            message: 'IAM Identity Center Start URL (leave blank for AWS Builder ID)',
+            placeholder: 'https://your-company.awsapps.com/start',
+            validate: (value: string) => {
+              if (!value) return undefined
+              try {
+                new URL(value)
+                return undefined
+              } catch {
+                return 'Please enter a valid URL'
+              }
+            }
+          }
+        ],
         authorize: (inputs?: any) => idcMethod.authorize(inputs)
       }
     ]

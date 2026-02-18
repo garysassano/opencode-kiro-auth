@@ -1,11 +1,11 @@
+import type { AuthOuathResult } from '@opencode-ai/plugin'
 import { exec } from 'node:child_process'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
 import type { KiroIDCTokenResult } from '../../kiro/oauth-idc.js'
-import { authorizeKiroIDC } from '../../kiro/oauth-idc.js'
 import { createDeterministicAccountId } from '../../plugin/accounts.js'
 import { promptAddAnotherAccount, promptDeleteAccount, promptLoginMode } from '../../plugin/cli.js'
 import * as logger from '../../plugin/logger.js'
-import { startIDCAuthServer } from '../../plugin/server.js'
+import { startIDCAuthServerWithInput } from '../../plugin/server.js'
 import type { KiroRegion, ManagedAccount } from '../../plugin/types.js'
 import { fetchUsageLimits } from '../../plugin/usage.js'
 
@@ -29,23 +29,24 @@ export class IdcAuthMethod {
     private repository: AccountRepository
   ) {}
 
-  async authorize(inputs?: any): Promise<{
-    url: string
-    instructions: string
-    method: 'auto'
-    callback: () => Promise<{ type: 'success' | 'failed'; key?: string }>
-  }> {
+  async authorize(inputs?: Record<string, string>): Promise<AuthOuathResult> {
     return new Promise(async (resolve) => {
       const region = this.config.default_region
+      // inputs.start_url takes priority over config; browser input page will also allow override
+      const defaultStartUrl = inputs?.start_url || this.config.idc_start_url
       if (inputs) {
-        await this.handleMultipleLogin(region, resolve)
+        await this.handleMultipleLogin(region, defaultStartUrl, resolve)
       } else {
-        await this.handleSingleLogin(region, resolve)
+        await this.handleSingleLogin(region, defaultStartUrl, resolve)
       }
     })
   }
 
-  private async handleMultipleLogin(region: KiroRegion, resolve: any): Promise<void> {
+  private async handleMultipleLogin(
+    region: KiroRegion,
+    defaultStartUrl: string | undefined,
+    resolve: any
+  ): Promise<void> {
     const accounts: KiroIDCTokenResult[] = []
     let startFresh = true
 
@@ -90,14 +91,15 @@ export class IdcAuthMethod {
     }
     while (true) {
       try {
-        const authData = await authorizeKiroIDC(region)
-        const { url, waitForAuth } = await startIDCAuthServer(
-          authData,
+        const { url, waitForAuth } = await startIDCAuthServerWithInput(
+          region,
+          defaultStartUrl,
           this.config.auth_server_port_start,
           this.config.auth_server_port_range
         )
         openBrowser(url)
         const res = await waitForAuth()
+        const startUrl = defaultStartUrl
         const u = await fetchUsageLimits({
           refresh: '',
           access: res.accessToken,
@@ -127,6 +129,7 @@ export class IdcAuthMethod {
           region,
           clientId: res.clientId,
           clientSecret: res.clientSecret,
+          startUrl: startUrl || undefined,
           refreshToken: res.refreshToken,
           accessToken: res.accessToken,
           expiresAt: res.expiresAt,
@@ -150,18 +153,22 @@ export class IdcAuthMethod {
       url: '',
       instructions: `Complete (${finalAccounts.length} accounts).`,
       method: 'auto',
-      callback: async () => ({
+      callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => ({
         type: 'success',
         key: finalAccounts[0]?.accessToken || ''
       })
     })
   }
 
-  private async handleSingleLogin(region: KiroRegion, resolve: any): Promise<void> {
+  private async handleSingleLogin(
+    region: KiroRegion,
+    defaultStartUrl: string | undefined,
+    resolve: any
+  ): Promise<void> {
     try {
-      const authData = await authorizeKiroIDC(region)
-      const { url, waitForAuth } = await startIDCAuthServer(
-        authData,
+      const { url, waitForAuth } = await startIDCAuthServerWithInput(
+        region,
+        defaultStartUrl,
         this.config.auth_server_port_start,
         this.config.auth_server_port_range
       )
@@ -170,9 +177,10 @@ export class IdcAuthMethod {
         url,
         instructions: `Open: ${url}`,
         method: 'auto',
-        callback: async () => {
+        callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => {
           try {
             const res = await waitForAuth()
+            const startUrl = defaultStartUrl
             const u = await fetchUsageLimits({
               refresh: '',
               access: res.accessToken,
@@ -191,6 +199,7 @@ export class IdcAuthMethod {
               region,
               clientId: res.clientId,
               clientSecret: res.clientSecret,
+              startUrl: startUrl || undefined,
               refreshToken: res.refreshToken,
               accessToken: res.accessToken,
               expiresAt: res.expiresAt,
@@ -212,7 +221,7 @@ export class IdcAuthMethod {
         url: '',
         instructions: 'Failed',
         method: 'auto',
-        callback: async () => ({ type: 'failed' })
+        callback: async (): Promise<{ type: 'failed' }> => ({ type: 'failed' })
       })
     }
   }
