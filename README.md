@@ -8,7 +8,7 @@ OpenCode plugin for AWS Kiro (CodeWhisperer) providing access to Claude Sonnet a
 
 ## Features
 
-- **Multiple Auth Methods**: Supports AWS Builder ID (IDC) and Kiro Desktop (CLI-based) authentication.
+- **Multiple Auth Methods**: Supports AWS Builder ID (IDC), IAM Identity Center (custom Start URL), and Kiro Desktop (CLI-based) authentication.
 - **Auto-Sync Kiro CLI**: Automatically imports and synchronizes active sessions from your local `kiro-cli` SQLite database.
 - **Gradual Context Truncation**: Intelligently prevents error 400 by reducing context size dynamically during retries.
 - **Intelligent Account Rotation**: Prioritizes multi-account usage based on lowest available quota.
@@ -116,7 +116,10 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
 2. **Direct Authentication**:
    - Run `opencode auth login`.
    - Select `Other`, type `kiro`, and press enter.
-   - Follow the instructions for **AWS Builder ID (IDC)**.
+   - A browser page will open asking for your **IAM Identity Center Start URL**.
+     - Leave it blank to sign in with **AWS Builder ID**.
+     - Enter your company's Start URL (e.g. `https://your-company.awsapps.com/start`) to use **IAM Identity Center (SSO)**.
+   - You can also pre-configure the Start URL in `~/.config/opencode/kiro.json` via `idc_start_url` to skip the prompt.
 3. Configuration will be automatically managed at `~/.config/opencode/kiro.db`.
 
 ## Troubleshooting
@@ -155,6 +158,7 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
   "auto_sync_kiro_cli": true,
   "account_selection_strategy": "lowest-usage",
   "default_region": "us-east-1",
+  "idc_start_url": "https://your-company.awsapps.com/start",
   "rate_limit_retry_delay_ms": 5000,
   "rate_limit_max_retries": 3,
   "max_request_iterations": 20,
@@ -173,6 +177,7 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
 - `auto_sync_kiro_cli`: Automatically sync sessions from Kiro CLI (default: `true`).
 - `account_selection_strategy`: Account rotation strategy (`sticky`, `round-robin`, `lowest-usage`).
 - `default_region`: AWS region (`us-east-1`, `us-west-2`).
+- `idc_start_url`: Pre-configure your IAM Identity Center Start URL (e.g. `https://your-company.awsapps.com/start`). If set, the browser auth page will pre-fill this value. Leave unset to default to AWS Builder ID.
 - `rate_limit_retry_delay_ms`: Delay between rate limit retries (1000-60000ms).
 - `rate_limit_max_retries`: Maximum retry attempts for rate limits (0-10).
 - `max_request_iterations`: Maximum loop iterations to prevent hangs (10-1000).
