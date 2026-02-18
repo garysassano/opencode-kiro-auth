@@ -580,3 +580,153 @@ export function getErrorHtml(message: string): string {
 </body>
 </html>`
 }
+
+export function getStartUrlInputHtml(defaultStartUrl: string, submitUrl: string): string {
+  const escapedDefault = escapeHtml(defaultStartUrl)
+  const escapedSubmit = escapeHtml(submitUrl)
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AWS Authentication Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      max-width: 500px;
+      width: 100%;
+      padding: 48px 40px;
+      animation: slideIn 0.4s ease-out;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    h1 { color: #1a202c; font-size: 26px; font-weight: 700; margin-bottom: 10px; }
+    .subtitle { color: #718096; font-size: 15px; margin-bottom: 32px; line-height: 1.5; }
+    label { display: block; color: #4a5568; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+    input[type="url"], input[type="text"] {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 15px;
+      color: #2d3748;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #667eea; }
+    .hint { color: #a0aec0; font-size: 13px; margin-top: 8px; margin-bottom: 24px; }
+    .hint a { color: #667eea; text-decoration: none; }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    button:hover { opacity: 0.9; transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .error { color: #e53e3e; font-size: 13px; margin-top: 8px; display: none; }
+    .loading { display: none; text-align: center; color: #718096; margin-top: 16px; font-size: 14px; }
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid #e2e8f0; border-top-color: #667eea;
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AWS Authentication</h1>
+    <p class="subtitle">Enter your IAM Identity Center Start URL, or leave blank to use AWS Builder ID.</p>
+
+    <form id="form" onsubmit="handleSubmit(event)">
+      <label for="startUrl">Start URL</label>
+      <input
+        type="text"
+        id="startUrl"
+        name="startUrl"
+        placeholder="https://your-company.awsapps.com/start"
+        value="${escapedDefault}"
+        autocomplete="url"
+        spellcheck="false"
+      />
+      <div class="hint">Leave blank to sign in with <strong>AWS Builder ID</strong></div>
+      <div class="error" id="error"></div>
+      <button type="submit" id="btn">Continue</button>
+    </form>
+
+    <div class="loading" id="loading">
+      <span class="spinner"></span>Initializing authentication...
+    </div>
+  </div>
+
+  <script>
+    async function handleSubmit(e) {
+      e.preventDefault();
+      const input = document.getElementById('startUrl');
+      const errorEl = document.getElementById('error');
+      const btn = document.getElementById('btn');
+      const loading = document.getElementById('loading');
+      const val = input.value.trim();
+
+      if (val) {
+        try { new URL(val); } catch {
+          errorEl.textContent = 'Please enter a valid URL';
+          errorEl.style.display = 'block';
+          return;
+        }
+      }
+
+      errorEl.style.display = 'none';
+      btn.disabled = true;
+      loading.style.display = 'block';
+
+      try {
+        const res = await fetch('${escapedSubmit}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startUrl: val || '' })
+        });
+        const data = await res.json();
+        if (data.error) {
+          errorEl.textContent = data.error;
+          errorEl.style.display = 'block';
+          btn.disabled = false;
+          loading.style.display = 'none';
+        } else {
+          window.location.href = '/auth?code=' + encodeURIComponent(data.userCode) + '&url=' + encodeURIComponent(data.verificationUriComplete);
+        }
+      } catch (err) {
+        errorEl.textContent = 'Failed to connect. Please try again.';
+        errorEl.style.display = 'block';
+        btn.disabled = false;
+        loading.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>`
+}
