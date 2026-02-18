@@ -5,6 +5,7 @@ import {
   buildHistory,
   extractToolNamesFromHistory,
   historyHasToolCalling,
+  injectSystemPrompt,
   truncateHistory
 } from '../infrastructure/transformers/history-builder.js'
 import {
@@ -39,19 +40,26 @@ export function transformToCodeWhisperer(
   const convId = crypto.randomUUID()
   if (!messages || messages.length === 0) throw new Error('No messages')
   const resolved = resolveKiroModel(model)
+  const systemMsgs = messages.filter((m: any) => m.role === 'system')
+  const otherMsgs = messages.filter((m: any) => m.role !== 'system')
   let sys = system || ''
+  if (systemMsgs.length > 0) {
+    const extractedSystem = systemMsgs.map((m: any) => getContentText(m)).join('\n\n')
+    sys = sys ? `${sys}\n\n${extractedSystem}` : extractedSystem
+  }
   if (think) {
     const pfx = `<thinking_mode>enabled</thinking_mode><max_thinking_length>${budget}</max_thinking_length>`
     sys = sys.includes('<thinking_mode>') ? sys : sys ? `${pfx}\n${sys}` : pfx
   }
-  const msgs = mergeAdjacentMessages([...messages])
+  const msgs = mergeAdjacentMessages([...otherMsgs])
   const lastMsg = msgs[msgs.length - 1]
   if (lastMsg && lastMsg.role === 'assistant' && getContentText(lastMsg) === '{') msgs.pop()
   const cwTools = tools ? convertToolsToCodeWhisperer(tools) : []
   const toolResultLimit = Math.floor(250000 * reductionFactor)
-  let history = buildHistory(msgs, resolved, sys, toolResultLimit)
+  let history = buildHistory(msgs, resolved, toolResultLimit)
   const historyLimit = Math.floor(850000 * reductionFactor)
   history = truncateHistory(history, historyLimit)
+  history = injectSystemPrompt(history, sys, resolved)
   const curMsg = msgs[msgs.length - 1]
   if (!curMsg) throw new Error('Empty')
   let curContent = ''
