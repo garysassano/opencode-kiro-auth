@@ -11,6 +11,7 @@ export interface KiroIDCAuthorization {
   interval: number
   expiresIn: number
   region: KiroRegion
+  startUrl: string
 }
 
 export interface KiroIDCTokenResult {
@@ -24,9 +25,10 @@ export interface KiroIDCTokenResult {
   authMethod: 'idc'
 }
 
-export async function authorizeKiroIDC(region?: KiroRegion): Promise<KiroIDCAuthorization> {
+export async function authorizeKiroIDC(region?: KiroRegion, startUrl?: string): Promise<KiroIDCAuthorization> {
   const effectiveRegion = normalizeRegion(region)
   const ssoOIDCEndpoint = buildUrl(KIRO_AUTH_SERVICE.SSO_OIDC_ENDPOINT, effectiveRegion)
+  const effectiveStartUrl = startUrl || KIRO_AUTH_SERVICE.BUILDER_ID_START_URL
 
   try {
     const registerResponse = await fetch(`${ssoOIDCEndpoint}/client/register`, {
@@ -66,7 +68,7 @@ export async function authorizeKiroIDC(region?: KiroRegion): Promise<KiroIDCAuth
       body: JSON.stringify({
         clientId,
         clientSecret,
-        startUrl: KIRO_AUTH_SERVICE.BUILDER_ID_START_URL
+        startUrl: effectiveStartUrl
       })
     })
 
@@ -103,7 +105,8 @@ export async function authorizeKiroIDC(region?: KiroRegion): Promise<KiroIDCAuth
       clientSecret,
       interval,
       expiresIn,
-      region: effectiveRegion
+      region: effectiveRegion,
+      startUrl: effectiveStartUrl
     }
   } catch (error) {
     throw error

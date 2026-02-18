@@ -65,6 +65,7 @@ export const KIRO_AUTH_SERVICE = {
   ENDPOINT: 'https://prod.{{region}}.auth.desktop.kiro.dev',
   SSO_OIDC_ENDPOINT: 'https://oidc.{{region}}.amazonaws.com',
   BUILDER_ID_START_URL: 'https://view.awsapps.com/start',
+  USER_INFO_URL: 'https://view.awsapps.com/api/user/info',
   SCOPES: [
     'codewhisperer:completions',
     'codewhisperer:analysis',

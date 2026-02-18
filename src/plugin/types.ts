@@ -29,6 +29,7 @@ export interface ManagedAccount {
   clientId?: string
   clientSecret?: string
   profileArn?: string
+  startUrl?: string
   refreshToken: string
   accessToken: string
   expiresAt: number

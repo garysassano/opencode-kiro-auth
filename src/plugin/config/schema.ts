@@ -9,6 +9,8 @@ export type Region = z.infer<typeof RegionSchema>
 export const KiroConfigSchema = z.object({
   $schema: z.string().optional(),
 
+  idc_start_url: z.string().url().optional(),
+
   account_selection_strategy: AccountSelectionStrategySchema.default('lowest-usage'),
 
   default_region: RegionSchema.default('us-east-1'),

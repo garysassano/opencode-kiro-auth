@@ -29,7 +29,7 @@ export class IdcAuthMethod {
     private repository: AccountRepository
   ) {}
 
-  async authorize(inputs?: any): Promise<{
+  async authorize(inputs?: Record<string, string>): Promise<{
     url: string
     instructions: string
     method: 'auto'
@@ -37,15 +37,17 @@ export class IdcAuthMethod {
   }> {
     return new Promise(async (resolve) => {
       const region = this.config.default_region
+      // inputs.start_url takes priority over config, which takes priority over the default Builder ID URL
+      const startUrl = inputs?.start_url || this.config.idc_start_url
       if (inputs) {
-        await this.handleMultipleLogin(region, resolve)
+        await this.handleMultipleLogin(region, startUrl, resolve)
       } else {
-        await this.handleSingleLogin(region, resolve)
+        await this.handleSingleLogin(region, startUrl, resolve)
       }
     })
   }
 
-  private async handleMultipleLogin(region: KiroRegion, resolve: any): Promise<void> {
+  private async handleMultipleLogin(region: KiroRegion, startUrl: string | undefined, resolve: any): Promise<void> {
     const accounts: KiroIDCTokenResult[] = []
     let startFresh = true
 
@@ -90,7 +92,7 @@ export class IdcAuthMethod {
     }
     while (true) {
       try {
-        const authData = await authorizeKiroIDC(region)
+        const authData = await authorizeKiroIDC(region, startUrl)
         const { url, waitForAuth } = await startIDCAuthServer(
           authData,
           this.config.auth_server_port_start,
@@ -127,6 +129,7 @@ export class IdcAuthMethod {
           region,
           clientId: res.clientId,
           clientSecret: res.clientSecret,
+          startUrl: startUrl || undefined,
           refreshToken: res.refreshToken,
           accessToken: res.accessToken,
           expiresAt: res.expiresAt,
@@ -157,9 +160,9 @@ export class IdcAuthMethod {
     })
   }
 
-  private async handleSingleLogin(region: KiroRegion, resolve: any): Promise<void> {
+  private async handleSingleLogin(region: KiroRegion, startUrl: string | undefined, resolve: any): Promise<void> {
     try {
-      const authData = await authorizeKiroIDC(region)
+      const authData = await authorizeKiroIDC(region, startUrl)
       const { url, waitForAuth } = await startIDCAuthServer(
         authData,
         this.config.auth_server_port_start,
@@ -191,6 +194,7 @@ export class IdcAuthMethod {
               region,
               clientId: res.clientId,
               clientSecret: res.clientSecret,
+              startUrl: startUrl || undefined,
               refreshToken: res.refreshToken,
               accessToken: res.accessToken,
               expiresAt: res.expiresAt,

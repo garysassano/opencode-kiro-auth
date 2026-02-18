@@ -21,6 +21,7 @@ export interface IDCAuthData {
   interval: number
   expiresIn: number
   region: KiroRegion
+  startUrl: string
 }
 
 async function tryPort(port: number): Promise<boolean> {
@@ -110,7 +111,9 @@ export async function startIDCAuthServer(
             exp = Date.now() + (d.expires_in || d.expiresIn || 0) * 1000
           let email = 'builder-id@aws.amazon.com'
           try {
-            const infoRes = await fetch('https://view.awsapps.com/api/user/info', {
+            // Derive user info URL from startUrl: replace /start with /api/user/info
+            const userInfoUrl = authData.startUrl.replace(/\/start\/?$/, '/api/user/info')
+            const infoRes = await fetch(userInfoUrl, {
               headers: { Authorization: `Bearer ${acc}` }
             })
             if (infoRes.ok) {
