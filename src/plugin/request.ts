@@ -230,17 +230,12 @@ export function transformToCodeWhisperer(
       }
     }
   }
-  const machineId = crypto
-    .createHash('sha256')
-    .update(auth.profileArn || auth.clientId || 'KIRO_DEFAULT_MACHINE')
-    .digest('hex')
   const osP = os.platform(),
     osR = os.release(),
-    nodeV = process.version.replace('v', ''),
-    kiroV = KIRO_CONSTANTS.KIRO_VERSION
+    nodeV = process.version.replace('v', '')
   const osN =
     osP === 'win32' ? `windows#${osR}` : osP === 'darwin' ? `macos#${osR}` : `${osP}#${osR}`
-  const ua = `aws-sdk-js/1.0.0 ua/2.1 os/${osN} lang/js md/nodejs#${nodeV} api/codewhispererruntime#1.0.0 m/E KiroIDE-${kiroV}-${machineId}`
+  const ua = `aws-sdk-js/3.738.0 ua/2.1 os/${osN} lang/js md/nodejs#${nodeV} api/codewhisperer#3.738.0 m/E KiroIDE`
   return {
     url: KIRO_CONSTANTS.BASE_URL.replace('{{region}}', auth.region),
     init: {
@@ -252,7 +247,7 @@ export function transformToCodeWhisperer(
         'amz-sdk-invocation-id': crypto.randomUUID(),
         'amz-sdk-request': 'attempt=1; max=1',
         'x-amzn-kiro-agent-mode': 'vibe',
-        'x-amz-user-agent': `aws-sdk-js/1.0.0 KiroIDE-${kiroV}-${machineId}`,
+        'x-amz-user-agent': 'aws-sdk-js/3.738.0 KiroIDE',
         'user-agent': ua,
         Connection: 'close'
       },

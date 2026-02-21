@@ -58,7 +58,7 @@ export const KiroConfigSchema = z.object({
 
   request_timeout_ms: z.number().min(30000).max(600000).default(120000),
 
-  token_expiry_buffer_ms: z.number().min(30000).max(300000).default(120000),
+  token_expiry_buffer_ms: z.number().min(30000).max(300000).default(300000),
 
   usage_sync_max_retries: z.number().min(0).max(5).default(3),
 
@@ -80,7 +80,7 @@ export const DEFAULT_CONFIG: KiroConfig = {
   rate_limit_max_retries: 3,
   max_request_iterations: 20,
   request_timeout_ms: 120000,
-  token_expiry_buffer_ms: 120000,
+  token_expiry_buffer_ms: 300000,
   usage_sync_max_retries: 3,
   auth_server_port_start: 19847,
   auth_server_port_range: 10,
