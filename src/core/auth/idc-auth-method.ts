@@ -60,19 +60,12 @@ export class IdcAuthMethod {
     const configuredServiceRegion: KiroRegion = this.config.default_region
     const invokedWithoutPrompts = !inputs || Object.keys(inputs).length === 0
 
-    // `/connect` in OpenCode may call `authorize()` without running our prompts.
-    // We *must not* guess a flow (especially not Builder ID) in this case.
-    if (invokedWithoutPrompts) {
-      throw new Error(
-        'This auth flow requires interactive prompts, but `/connect` did not provide them. Please use `opencode auth login`, or preconfigure `idc_start_url` + `idc_region` in `~/.config/opencode/kiro.json`.'
-      )
-    }
-
     const startUrl = normalizeStartUrl(inputs?.start_url || this.config.idc_start_url) || undefined
     const oidcRegion: KiroRegion = normalizeRegion(inputs?.idc_region || this.config.idc_region)
     const configuredProfileArn = this.config.idc_profile_arn
     logger.log('IDC authorize: resolved defaults', {
       hasInputs: !!inputs && Object.keys(inputs).length > 0,
+      invokedWithoutPrompts,
       startUrlSource: inputs?.start_url ? 'inputs' : this.config.idc_start_url ? 'config' : 'none',
       oidcRegion,
       startUrl: startUrl ? new URL(startUrl).origin : undefined

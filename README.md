@@ -119,6 +119,7 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
    - You'll be prompted for your **IAM Identity Center Start URL** and **IAM Identity Center region** (`sso_region`).
      - Leave it blank to sign in with **AWS Builder ID**.
      - Enter your company's Start URL (e.g. `https://your-company.awsapps.com/start`) to use **IAM Identity Center (SSO)**.
+   - Note: the TUI `/connect` flow currently does **not** run plugin OAuth prompts (Start URL / region), so Identity Center logins may fall back to Builder ID unless you use `opencode auth login` (or preconfigure defaults in `~/.config/opencode/kiro.json`).
    - For **IAM Identity Center**, you may also need a **profile ARN** (`profileArn`).
      - If `kiro-cli` is installed and you've selected a profile once (`kiro-cli profile`), the plugin auto-detects it.
      - Otherwise, set `idc_profile_arn` in `~/.config/opencode/kiro.json`.
@@ -172,6 +173,10 @@ This happens when the plugin has no records in `~/.config/opencode/kiro.db`.
 1. Ensure `kiro-cli login` succeeds.
 2. Ensure `auto_sync_kiro_cli` is `true` in `~/.config/opencode/kiro.json`.
 3. Retry the request; the plugin will attempt a Kiro CLI sync when it detects zero accounts.
+
+### Note: `/connect` vs `opencode auth login`
+
+If you need to enter provider-specific values for an OAuth login (like IAM Identity Center Start URL / region), use `opencode auth login`. The current TUI `/connect` flow may not display plugin OAuth prompts, so it can’t collect those inputs.
 
 Note for IDC/SSO (ODIC): the plugin may temporarily create an account with a placeholder email if it cannot fetch the real email during sync (e.g. offline). It will replace it with the real email once usage/email lookup succeeds.
 
