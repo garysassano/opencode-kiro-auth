@@ -25,7 +25,10 @@ export interface KiroIDCTokenResult {
   authMethod: 'idc'
 }
 
-export async function authorizeKiroIDC(region?: KiroRegion, startUrl?: string): Promise<KiroIDCAuthorization> {
+export async function authorizeKiroIDC(
+  region?: KiroRegion,
+  startUrl?: string
+): Promise<KiroIDCAuthorization> {
   const effectiveRegion = normalizeRegion(region)
   const ssoOIDCEndpoint = buildUrl(KIRO_AUTH_SERVICE.SSO_OIDC_ENDPOINT, effectiveRegion)
   const effectiveStartUrl = startUrl || KIRO_AUTH_SERVICE.BUILDER_ID_START_URL
@@ -153,7 +156,17 @@ export async function pollKiroIDCToken(
         })
       })
 
-      const tokenData = await tokenResponse.json()
+      const responseText = await tokenResponse.text().catch(() => '')
+      let tokenData: any = {}
+      if (responseText) {
+        try {
+          tokenData = JSON.parse(responseText)
+        } catch (parseError: any) {
+          throw new Error(
+            `Token polling failed: invalid JSON response (HTTP ${tokenResponse.status}): ${responseText.slice(0, 300)}`
+          )
+        }
+      }
 
       if (tokenData.error) {
         const errorType = tokenData.error
@@ -185,13 +198,17 @@ export async function pollKiroIDCToken(
         throw error
       }
 
-      if (tokenData.accessToken && tokenData.refreshToken) {
-        const expiresInSeconds = tokenData.expiresIn || 3600
+      const accessToken = tokenData.access_token || tokenData.accessToken
+      const refreshToken = tokenData.refresh_token || tokenData.refreshToken
+      const tokenExpiresIn = tokenData.expires_in || tokenData.expiresIn
+
+      if (accessToken && refreshToken) {
+        const expiresInSeconds = tokenExpiresIn || 3600
         const expiresAt = Date.now() + expiresInSeconds * 1000
 
         return {
-          refreshToken: tokenData.refreshToken,
-          accessToken: tokenData.accessToken,
+          refreshToken,
+          accessToken,
           expiresAt,
           email: 'builder-id@aws.amazon.com',
           clientId,
@@ -202,9 +219,18 @@ export async function pollKiroIDCToken(
       }
 
       if (!tokenResponse.ok) {
-        const error = new Error(`Token request failed with status: ${tokenResponse.status}`)
+        const error = new Error(
+          `Token request failed with status: ${tokenResponse.status} ${
+            responseText ? `(${responseText.slice(0, 200)})` : ''
+          }`
+        )
         throw error
       }
+
+      // If the service returned HTTP 200 but no tokens and no error, treat as invalid response.
+      throw new Error(
+        `Token polling failed: missing tokens in response: ${responseText ? responseText.slice(0, 300) : '[empty]'}`
+      )
     } catch (error) {
       if (
         error instanceof Error &&

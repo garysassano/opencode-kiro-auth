@@ -1,9 +1,13 @@
 import { KiroAuthDetails, ManagedAccount } from './types'
 
 export async function fetchUsageLimits(auth: KiroAuthDetails): Promise<any> {
-  const url = `https://q.${auth.region}.amazonaws.com/getUsageLimits?isEmailRequired=true&origin=AI_EDITOR&resourceType=AGENTIC_REQUEST`
+  const url = new URL(`https://q.${auth.region}.amazonaws.com/getUsageLimits`)
+  url.searchParams.set('isEmailRequired', 'true')
+  url.searchParams.set('origin', 'AI_EDITOR')
+  url.searchParams.set('resourceType', 'AGENTIC_REQUEST')
+  if (auth.profileArn) url.searchParams.set('profileArn', auth.profileArn)
   try {
-    const res = await fetch(url, {
+    const res = await fetch(url.toString(), {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${auth.access}`,
@@ -12,7 +16,25 @@ export async function fetchUsageLimits(auth: KiroAuthDetails): Promise<any> {
         'amz-sdk-request': 'attempt=1; max=1'
       }
     })
-    if (!res.ok) throw new Error(`Status: ${res.status}`)
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      const requestId =
+        res.headers.get('x-amzn-requestid') ||
+        res.headers.get('x-amzn-request-id') ||
+        res.headers.get('x-amz-request-id') ||
+        ''
+      const errType =
+        res.headers.get('x-amzn-errortype') || res.headers.get('x-amzn-error-type') || ''
+      const msg =
+        body && body.length > 0
+          ? `${body.slice(0, 2000)}${body.length > 2000 ? '…' : ''}`
+          : `HTTP ${res.status}`
+      throw new Error(
+        `Status: ${res.status}${errType ? ` (${errType})` : ''}${
+          requestId ? ` [${requestId}]` : ''
+        }: ${msg}`
+      )
+    }
     const data: any = await res.json()
     let usedCount = 0,
       limitCount = 0

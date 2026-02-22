@@ -151,6 +151,17 @@ mv "$PLUGIN_DIR/dist.bak.YYYYMMDD-HHMMSS" "$PLUGIN_DIR/dist"
 
 ## Troubleshooting
 
+### Error: Status: 403 (AccessDeniedException / User is not authorized)
+
+If you're using **IAM Identity Center** (a custom Start URL), the Q Developer / CodeWhisperer APIs typically require a **profile ARN**.
+
+This plugin reads the active profile ARN from your local `kiro-cli` database (`state.key = api.codewhisperer.profile`) and sends it as `profileArn`.
+
+Fix:
+
+1. Run `kiro-cli profile` and select a profile (e.g. `QDevProfile-us-east-1`).
+2. Retry `opencode auth login` (or restart OpenCode so it re-syncs).
+
 ### Error: No accounts
 
 This happens when the plugin has no records in `~/.config/opencode/kiro.db`.

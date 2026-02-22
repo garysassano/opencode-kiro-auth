@@ -1,10 +1,11 @@
 import type { AuthOuathResult } from '@opencode-ai/plugin'
 import { exec } from 'node:child_process'
-import { normalizeRegion } from '../../constants.js'
+import { extractRegionFromArn, normalizeRegion } from '../../constants.js'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
 import { authorizeKiroIDC, pollKiroIDCToken } from '../../kiro/oauth-idc.js'
 import { createDeterministicAccountId } from '../../plugin/accounts.js'
 import * as logger from '../../plugin/logger.js'
+import { readActiveProfileArnFromKiroCli } from '../../plugin/sync/kiro-cli-profile.js'
 import type { KiroRegion, ManagedAccount } from '../../plugin/types.js'
 import { fetchUsageLimits } from '../../plugin/usage.js'
 
@@ -56,7 +57,7 @@ export class IdcAuthMethod {
   ) {}
 
   async authorize(inputs?: Record<string, string>): Promise<AuthOuathResult> {
-    const serviceRegion: KiroRegion = this.config.default_region
+    const configuredServiceRegion: KiroRegion = this.config.default_region
     const startUrl = normalizeStartUrl(inputs?.start_url || this.config.idc_start_url)
     const oidcRegion: KiroRegion = normalizeRegion(inputs?.idc_region || this.config.idc_region)
 
@@ -89,6 +90,8 @@ export class IdcAuthMethod {
             oidcRegion
           )
 
+          const profileArn = readActiveProfileArnFromKiroCli()
+          const serviceRegion = extractRegionFromArn(profileArn) || configuredServiceRegion
           const usage = await fetchUsageLimits({
             refresh: '',
             access: token.accessToken,
@@ -96,11 +99,12 @@ export class IdcAuthMethod {
             authMethod: 'idc',
             region: serviceRegion,
             clientId: token.clientId,
-            clientSecret: token.clientSecret
+            clientSecret: token.clientSecret,
+            profileArn
           })
           if (!usage.email) return { type: 'failed' }
 
-          const id = createDeterministicAccountId(usage.email, 'idc', token.clientId)
+          const id = createDeterministicAccountId(usage.email, 'idc', token.clientId, profileArn)
           const acc: ManagedAccount = {
             id,
             email: usage.email,
@@ -109,6 +113,7 @@ export class IdcAuthMethod {
             oidcRegion,
             clientId: token.clientId,
             clientSecret: token.clientSecret,
+            profileArn,
             startUrl: startUrl || undefined,
             refreshToken: token.refreshToken,
             accessToken: token.accessToken,
@@ -125,8 +130,11 @@ export class IdcAuthMethod {
 
           return { type: 'success', key: token.accessToken }
         } catch (e: any) {
-          logger.warn('IDC auth callback failed', e)
-          return { type: 'failed' }
+          const err = e instanceof Error ? e : new Error(String(e))
+          logger.error('IDC auth callback failed', err)
+          throw new Error(
+            `IDC authorization failed: ${err.message}. Check ~/.config/opencode/kiro-logs/plugin.log for details. If this is an Identity Center account, ensure you have selected an AWS Q Developer/CodeWhisperer profile (try: kiro-cli profile).`
+          )
         }
       }
     }

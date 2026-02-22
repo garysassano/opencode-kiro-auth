@@ -76,6 +76,7 @@ export async function refreshAccessToken(auth: KiroAuthDetails): Promise<KiroAut
       authMethod: auth.authMethod,
       region: auth.region,
       oidcRegion: auth.oidcRegion,
+      profileArn: auth.profileArn,
       clientId: auth.clientId,
       clientSecret: auth.clientSecret,
       email: auth.email || d.userInfo?.email

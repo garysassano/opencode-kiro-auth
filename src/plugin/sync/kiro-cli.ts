@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { existsSync } from 'node:fs'
+import { extractRegionFromArn, normalizeRegion } from '../../constants'
 import { createDeterministicAccountId } from '../accounts'
 import * as logger from '../logger'
 import { kiroDb } from '../storage/sqlite'
@@ -11,6 +12,7 @@ import {
   normalizeExpiresAt,
   safeJsonParse
 } from './kiro-cli-parser'
+import { readActiveProfileArnFromKiroCli } from './kiro-cli-profile'
 
 export async function syncFromKiroCli() {
   const dbPath = getCliDbPath()
@@ -19,6 +21,17 @@ export async function syncFromKiroCli() {
     const cliDb = new Database(dbPath, { readonly: true })
     cliDb.run('PRAGMA busy_timeout = 5000')
     const rows = cliDb.prepare('SELECT key, value FROM auth_kv').all() as any[]
+    let activeProfileArn: string | undefined
+    try {
+      const stateRow = cliDb
+        .prepare('SELECT value FROM state WHERE key = ?')
+        .get('api.codewhisperer.profile') as any
+      const parsed = safeJsonParse(stateRow?.value)
+      const arn = parsed?.arn || parsed?.profileArn || parsed?.profile_arn
+      if (typeof arn === 'string' && arn.trim()) activeProfileArn = arn.trim()
+    } catch {
+      // Ignore state read failures; token import can proceed.
+    }
 
     const deviceRegRow = rows.find(
       (r) => typeof r?.key === 'string' && r.key.includes('device-registration')
@@ -33,8 +46,10 @@ export async function syncFromKiroCli() {
 
         const isIdc = row.key.includes('odic')
         const authMethod = isIdc ? 'idc' : 'desktop'
-        const region = data.region || 'us-east-1'
-        const profileArn = data.profile_arn || data.profileArn
+        const oidcRegion = normalizeRegion(data.region)
+        let profileArn: string | undefined = data.profile_arn || data.profileArn
+        if (!profileArn && isIdc) profileArn = activeProfileArn || readActiveProfileArnFromKiroCli()
+        const serviceRegion = extractRegionFromArn(profileArn) || oidcRegion
 
         const accessToken = data.access_token || data.accessToken || ''
         const refreshToken = data.refresh_token || data.refreshToken
@@ -63,7 +78,7 @@ export async function syncFromKiroCli() {
             access: accessToken,
             expires: cliExpiresAt,
             authMethod,
-            region,
+            region: serviceRegion,
             profileArn,
             clientId,
             clientSecret,
@@ -79,7 +94,8 @@ export async function syncFromKiroCli() {
         } catch (e) {
           logger.warn('Kiro CLI sync: failed to fetch usage/email; falling back', {
             authMethod,
-            region
+            serviceRegion,
+            oidcRegion
           })
           logger.debug('Kiro CLI sync: usage fetch error', e)
         }
@@ -96,12 +112,12 @@ export async function syncFromKiroCli() {
           if (existing && typeof existing.email === 'string' && existing.email) {
             email = existing.email
           } else {
-            email = makePlaceholderEmail(authMethod, region, clientId, profileArn)
+            email = makePlaceholderEmail(authMethod, serviceRegion, clientId, profileArn)
           }
         }
 
         const resolvedEmail =
-          email || makePlaceholderEmail(authMethod, region, clientId, profileArn)
+          email || makePlaceholderEmail(authMethod, serviceRegion, clientId, profileArn)
 
         const id = createDeterministicAccountId(resolvedEmail, authMethod, clientId, profileArn)
         const existingById = all.find((a) => a.id === id)
@@ -113,7 +129,12 @@ export async function syncFromKiroCli() {
           continue
 
         if (usageOk) {
-          const placeholderEmail = makePlaceholderEmail(authMethod, region, clientId, profileArn)
+          const placeholderEmail = makePlaceholderEmail(
+            authMethod,
+            serviceRegion,
+            clientId,
+            profileArn
+          )
           const placeholderId = createDeterministicAccountId(
             placeholderEmail,
             authMethod,
@@ -127,8 +148,8 @@ export async function syncFromKiroCli() {
                 id: placeholderId,
                 email: placeholderRow.email,
                 authMethod,
-                region: placeholderRow.region || region,
-                oidcRegion: placeholderRow.oidc_region || placeholderRow.region || region,
+                region: placeholderRow.region || serviceRegion,
+                oidcRegion: placeholderRow.oidc_region || oidcRegion,
                 clientId,
                 clientSecret,
                 profileArn,
@@ -152,8 +173,8 @@ export async function syncFromKiroCli() {
           id,
           email: resolvedEmail,
           authMethod,
-          region,
-          oidcRegion: region,
+          region: serviceRegion,
+          oidcRegion,
           clientId,
           clientSecret,
           profileArn,

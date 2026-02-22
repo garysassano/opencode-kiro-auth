@@ -25,6 +25,16 @@ export function buildUrl(template: string, region: KiroRegion): string {
   }
 }
 
+export function extractRegionFromArn(arn: string | undefined): KiroRegion | undefined {
+  if (!arn) return undefined
+  const parts = arn.split(':')
+  if (parts.length < 6) return undefined
+  if (parts[0] !== 'arn') return undefined
+  const region = parts[3]
+  if (typeof region !== 'string' || !region) return undefined
+  return isValidRegion(region) ? (region as KiroRegion) : undefined
+}
+
 export const KIRO_CONSTANTS = {
   REFRESH_URL: 'https://prod.{{region}}.auth.desktop.kiro.dev/refreshToken',
   REFRESH_IDC_URL: 'https://oidc.{{region}}.amazonaws.com/token',
