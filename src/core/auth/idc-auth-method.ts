@@ -4,7 +4,6 @@ import { extractRegionFromArn, normalizeRegion } from '../../constants.js'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
 import { authorizeKiroIDC, pollKiroIDCToken } from '../../kiro/oauth-idc.js'
 import { createDeterministicAccountId } from '../../plugin/accounts.js'
-import { detectAwsSsoDefaults } from '../../plugin/aws/aws-config.js'
 import * as logger from '../../plugin/logger.js'
 import { readActiveProfileArnFromKiroCli } from '../../plugin/sync/kiro-cli-profile.js'
 import type { KiroRegion, ManagedAccount } from '../../plugin/types.js'
@@ -59,35 +58,25 @@ export class IdcAuthMethod {
 
   async authorize(inputs?: Record<string, string>): Promise<AuthOuathResult> {
     const configuredServiceRegion: KiroRegion = this.config.default_region
-    const awsDefaults = detectAwsSsoDefaults(configuredServiceRegion)
     const invokedWithoutPrompts = !inputs || Object.keys(inputs).length === 0
-    const startUrl =
-      normalizeStartUrl(inputs?.start_url || this.config.idc_start_url || awsDefaults?.startUrl) ||
-      undefined
-    const oidcRegion: KiroRegion = normalizeRegion(
-      inputs?.idc_region || this.config.idc_region || awsDefaults?.ssoRegion
-    )
-    const configuredProfileArn = inputs?.profile_arn || this.config.idc_profile_arn
+
+    // `/connect` in OpenCode may call `authorize()` without running our prompts.
+    // We *must not* guess a flow (especially not Builder ID) in this case.
+    if (invokedWithoutPrompts) {
+      throw new Error(
+        'This auth flow requires interactive prompts, but `/connect` did not provide them. Please use `opencode auth login`, or preconfigure `idc_start_url` + `idc_region` in `~/.config/opencode/kiro.json`.'
+      )
+    }
+
+    const startUrl = normalizeStartUrl(inputs?.start_url || this.config.idc_start_url) || undefined
+    const oidcRegion: KiroRegion = normalizeRegion(inputs?.idc_region || this.config.idc_region)
+    const configuredProfileArn = this.config.idc_profile_arn
     logger.log('IDC authorize: resolved defaults', {
       hasInputs: !!inputs && Object.keys(inputs).length > 0,
-      startUrlSource: inputs?.start_url
-        ? 'inputs'
-        : this.config.idc_start_url
-          ? 'config'
-          : awsDefaults
-            ? `aws:${awsDefaults.profile}`
-            : 'none',
+      startUrlSource: inputs?.start_url ? 'inputs' : this.config.idc_start_url ? 'config' : 'none',
       oidcRegion,
       startUrl: startUrl ? new URL(startUrl).origin : undefined
     })
-
-    // `/connect` in OpenCode may call `authorize()` without running our prompts.
-    // In that case, never fall back to AWS Builder ID implicitly (it opens the email page).
-    if (invokedWithoutPrompts && !startUrl && !this.config.idc_start_url && !awsDefaults) {
-      throw new Error(
-        'IAM Identity Center Start URL/region not provided. Use `opencode auth login` (which prompts for Start URL + region), or set `idc_start_url` and `idc_region` in `~/.config/opencode/kiro.json`, or set `AWS_PROFILE`/`KIRO_AWS_PROFILE` to an SSO profile in `~/.aws/config`.'
-      )
-    }
 
     // Step 1: get device code + verification URL (fast)
     const auth = await authorizeKiroIDC(oidcRegion, startUrl)
@@ -104,7 +93,7 @@ export class IdcAuthMethod {
 
     return {
       url: verificationUrl,
-      instructions: `Open the verification URL and complete sign-in.\nCode: ${auth.userCode}\nURL: ${verificationUrl}`,
+      instructions: `Open the verification URL and complete sign-in.\nCode: ${auth.userCode}`,
       method: 'auto',
       callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => {
         try {
@@ -135,7 +124,7 @@ export class IdcAuthMethod {
           } catch (e) {
             if (startUrl && !profileArn) {
               throw new Error(
-                `Missing profile ARN for IAM Identity Center. Provide it in the login prompt (or set "idc_profile_arn" in ~/.config/opencode/kiro.json), or run "kiro-cli profile" once so it can be auto-detected. Original error: ${
+                `Missing profile ARN for IAM Identity Center. Set "idc_profile_arn" in ~/.config/opencode/kiro.json, or run "kiro-cli profile" once so it can be auto-detected. Original error: ${
                   e instanceof Error ? e.message : String(e)
                 }`
               )

@@ -64,26 +64,11 @@ export class AuthHandler {
             key: 'idc_region',
             message: 'IAM Identity Center region (sso_region) (leave blank for us-east-1)',
             placeholder: 'us-east-1',
-            condition: (inputs: Record<string, string>) => !!inputs.start_url?.trim(),
             validate: (value: string) => {
               if (!value) return undefined
               return RegionSchema.safeParse(value.trim()).success
                 ? undefined
                 : 'Please enter a valid AWS region'
-            }
-          },
-          {
-            type: 'text' as const,
-            key: 'profile_arn',
-            message:
-              'Q Developer / CodeWhisperer profile ARN (leave blank to auto-detect from kiro-cli)',
-            placeholder: 'arn:aws:codewhisperer:us-east-1:123456789012:profile/...',
-            condition: (inputs: Record<string, string>) => !!inputs.start_url?.trim(),
-            validate: (value: string) => {
-              if (!value) return undefined
-              const v = value.trim()
-              if (!v.startsWith('arn:aws:codewhisperer:')) return 'Please enter a valid profile ARN'
-              return undefined
             }
           }
         ],
