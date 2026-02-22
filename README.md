@@ -125,14 +125,28 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
 
 ## Local plugin development
 
-To run this plugin from a local checkout (without publishing to npm), you can use OpenCode's local plugin loading:
+OpenCode installs plugins into a cache directory (typically `~/.cache/opencode/node_modules`).
+
+The simplest way to test local changes (without publishing to npm) is to build this repo and hot-swap the cached plugin `dist/` folder:
 
 1. Build this repo: `bun run build` (or `npm run build`)
-2. Create `~/.config/opencode/plugins/kiro-auth-local.ts`:
+2. Hot-swap `dist/` (creates a timestamped backup):
 
-```ts
-import { KiroOAuthPlugin } from '/absolute/path/to/opencode-kiro-auth/dist/index.js'
-export default KiroOAuthPlugin
+```bash
+PLUGIN_DIR="$HOME/.cache/opencode/node_modules/@zhafron/opencode-kiro-auth"
+TS=$(date +%Y%m%d-%H%M%S)
+cp -a "$PLUGIN_DIR/dist" "$PLUGIN_DIR/dist.bak.$TS"
+rm -rf "$PLUGIN_DIR/dist"
+cp -a "/absolute/path/to/opencode-kiro-auth/dist" "$PLUGIN_DIR/dist"
+echo "Backup at: $PLUGIN_DIR/dist.bak.$TS"
+```
+
+Revert:
+
+```bash
+PLUGIN_DIR="$HOME/.cache/opencode/node_modules/@zhafron/opencode-kiro-auth"
+rm -rf "$PLUGIN_DIR/dist"
+mv "$PLUGIN_DIR/dist.bak.YYYYMMDD-HHMMSS" "$PLUGIN_DIR/dist"
 ```
 
 ## Troubleshooting

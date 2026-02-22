@@ -38,6 +38,16 @@ function normalizeStartUrl(raw: string | undefined): string | undefined {
   return url.toString()
 }
 
+function buildDeviceUrl(startUrl: string, userCode: string): string {
+  const url = new URL(startUrl)
+  url.search = ''
+  // Prefer `/start/` (with trailing slash) to match AWS portal URLs like `/start/#/device?...`.
+  if (url.pathname.endsWith('/start')) url.pathname = `${url.pathname}/`
+  url.pathname = url.pathname.replace(/\/start\/?$/, '/start/')
+  url.hash = `#/device?user_code=${encodeURIComponent(userCode)}`
+  return url.toString()
+}
+
 export class IdcAuthMethod {
   constructor(
     private config: any,
@@ -52,14 +62,20 @@ export class IdcAuthMethod {
 
     // Step 1: get device code + verification URL (fast)
     const auth = await authorizeKiroIDC(oidcRegion, startUrl)
-    const verificationUrl = auth.verificationUriComplete || auth.verificationUrl
+
+    // If a custom Identity Center start URL is provided, prefer the portal device page.
+    // This avoids the AWS Builder ID device page (which often prompts for an email)
+    // and routes the user into their org's IAM Identity Center sign-in.
+    const verificationUrl = startUrl
+      ? buildDeviceUrl(startUrl, auth.userCode)
+      : auth.verificationUriComplete || auth.verificationUrl
 
     // Open the *AWS* verification page directly (no local web server).
     openBrowser(verificationUrl)
 
     return {
       url: verificationUrl,
-      instructions: `Open the verification URL and complete sign-in.\nCode: ${auth.userCode}\nURL: ${auth.verificationUrl}`,
+      instructions: `Open the verification URL and complete sign-in.\nCode: ${auth.userCode}\nURL: ${verificationUrl}`,
       method: 'auto',
       callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => {
         try {
