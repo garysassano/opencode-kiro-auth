@@ -1,11 +1,10 @@
 import type { AuthOuathResult } from '@opencode-ai/plugin'
 import { exec } from 'node:child_process'
+import { normalizeRegion } from '../../constants.js'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
-import type { KiroIDCTokenResult } from '../../kiro/oauth-idc.js'
+import { authorizeKiroIDC, pollKiroIDCToken } from '../../kiro/oauth-idc.js'
 import { createDeterministicAccountId } from '../../plugin/accounts.js'
-import { promptAddAnotherAccount, promptDeleteAccount, promptLoginMode } from '../../plugin/cli.js'
 import * as logger from '../../plugin/logger.js'
-import { startIDCAuthServerWithInput } from '../../plugin/server.js'
 import type { KiroRegion, ManagedAccount } from '../../plugin/types.js'
 import { fetchUsageLimits } from '../../plugin/usage.js'
 
@@ -23,206 +22,97 @@ const openBrowser = (url: string) => {
   })
 }
 
+function normalizeStartUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+
+  const url = new URL(trimmed)
+  url.hash = ''
+  url.search = ''
+
+  // Normalize common portal URL shapes to end in `/start` (AWS Builder ID and IAM Identity Center)
+  if (url.pathname.endsWith('/start/')) url.pathname = url.pathname.replace(/\/start\/$/, '/start')
+  if (!url.pathname.endsWith('/start')) url.pathname = url.pathname.replace(/\/+$/, '') + '/start'
+
+  return url.toString()
+}
+
 export class IdcAuthMethod {
   constructor(
     private config: any,
-    private repository: AccountRepository
+    private repository: AccountRepository,
+    private accountManager: any
   ) {}
 
   async authorize(inputs?: Record<string, string>): Promise<AuthOuathResult> {
-    return new Promise(async (resolve) => {
-      const region = this.config.default_region
-      // inputs.start_url takes priority over config; browser input page will also allow override
-      const defaultStartUrl = inputs?.start_url || this.config.idc_start_url
-      if (inputs) {
-        await this.handleMultipleLogin(region, defaultStartUrl, resolve)
-      } else {
-        await this.handleSingleLogin(region, defaultStartUrl, resolve)
-      }
-    })
-  }
+    const serviceRegion: KiroRegion = this.config.default_region
+    const startUrl = normalizeStartUrl(inputs?.start_url || this.config.idc_start_url)
+    const oidcRegion: KiroRegion = normalizeRegion(inputs?.idc_region || this.config.idc_region)
 
-  private async handleMultipleLogin(
-    region: KiroRegion,
-    defaultStartUrl: string | undefined,
-    resolve: any
-  ): Promise<void> {
-    const accounts: KiroIDCTokenResult[] = []
-    let startFresh = true
+    // Step 1: get device code + verification URL (fast)
+    const auth = await authorizeKiroIDC(oidcRegion, startUrl)
+    const verificationUrl = auth.verificationUriComplete || auth.verificationUrl
 
-    while (true) {
-      const existingAccounts = await this.repository.findAll()
-      const idcAccs = existingAccounts.filter((a) => a.authMethod === 'idc')
+    // Open the *AWS* verification page directly (no local web server).
+    openBrowser(verificationUrl)
 
-      if (idcAccs.length === 0) {
-        break
-      }
-
-      const existingAccountsList = idcAccs.map((acc, idx) => ({
-        email: acc.email,
-        index: idx
-      }))
-      const mode = await promptLoginMode(existingAccountsList)
-
-      if (mode === 'delete') {
-        const deleteIndices = await promptDeleteAccount(existingAccountsList)
-        if (deleteIndices !== null && deleteIndices.length > 0) {
-          for (const idx of deleteIndices) {
-            const accToDelete = idcAccs[idx]
-            if (accToDelete) {
-              await this.repository.delete(accToDelete.id)
-              console.log(`[Success] Deleted: ${accToDelete.email}`)
-            }
-          }
-          console.log(`\n[Success] Deleted ${deleteIndices.length} account(s)\n`)
-        }
-        continue
-      }
-
-      if (mode === 'add') {
-        startFresh = false
-        break
-      }
-
-      if (mode === 'fresh') {
-        startFresh = true
-        break
-      }
-    }
-    while (true) {
-      try {
-        const { url, waitForAuth } = await startIDCAuthServerWithInput(
-          region,
-          defaultStartUrl,
-          this.config.auth_server_port_start,
-          this.config.auth_server_port_range
-        )
-        openBrowser(url)
-        const res = await waitForAuth()
-        const startUrl = defaultStartUrl
-        const u = await fetchUsageLimits({
-          refresh: '',
-          access: res.accessToken,
-          expires: res.expiresAt,
-          authMethod: 'idc',
-          region,
-          clientId: res.clientId,
-          clientSecret: res.clientSecret
-        })
-        if (!u.email) {
-          console.log('\n[Error] Failed to fetch account email. Skipping...\n')
-          continue
-        }
-        accounts.push(res as KiroIDCTokenResult)
-        if (accounts.length === 1 && startFresh) {
-          const allAccounts = await this.repository.findAll()
-          const idcAccountsToRemove = allAccounts.filter((a) => a.authMethod === 'idc')
-          for (const acc of idcAccountsToRemove) {
-            await this.repository.delete(acc.id)
-          }
-        }
-        const id = createDeterministicAccountId(u.email, 'idc', res.clientId)
-        const acc: ManagedAccount = {
-          id,
-          email: u.email,
-          authMethod: 'idc',
-          region,
-          clientId: res.clientId,
-          clientSecret: res.clientSecret,
-          startUrl: startUrl || undefined,
-          refreshToken: res.refreshToken,
-          accessToken: res.accessToken,
-          expiresAt: res.expiresAt,
-          rateLimitResetTime: 0,
-          isHealthy: true,
-          failCount: 0,
-          usedCount: u.usedCount,
-          limitCount: u.limitCount
-        }
-        await this.repository.save(acc)
-        const currentCount = (await this.repository.findAll()).length
-        console.log(`\n[Success] Added: ${u.email} (Quota: ${u.usedCount}/${u.limitCount})\n`)
-        if (!(await promptAddAnotherAccount(currentCount))) break
-      } catch (e: any) {
-        console.log(`\n[Error] Login failed: ${e.message}\n`)
-        break
-      }
-    }
-    const finalAccounts = await this.repository.findAll()
-    return resolve({
-      url: '',
-      instructions: `Complete (${finalAccounts.length} accounts).`,
+    return {
+      url: verificationUrl,
+      instructions: `Open the verification URL and complete sign-in.\nCode: ${auth.userCode}\nURL: ${auth.verificationUrl}`,
       method: 'auto',
-      callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => ({
-        type: 'success',
-        key: finalAccounts[0]?.accessToken || ''
-      })
-    })
-  }
+      callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => {
+        try {
+          // Step 2: poll until token is issued (standard device-code flow)
+          const token = await pollKiroIDCToken(
+            auth.clientId,
+            auth.clientSecret,
+            auth.deviceCode,
+            auth.interval,
+            auth.expiresIn,
+            oidcRegion
+          )
 
-  private async handleSingleLogin(
-    region: KiroRegion,
-    defaultStartUrl: string | undefined,
-    resolve: any
-  ): Promise<void> {
-    try {
-      const { url, waitForAuth } = await startIDCAuthServerWithInput(
-        region,
-        defaultStartUrl,
-        this.config.auth_server_port_start,
-        this.config.auth_server_port_range
-      )
-      openBrowser(url)
-      resolve({
-        url,
-        instructions: `Open: ${url}`,
-        method: 'auto',
-        callback: async (): Promise<{ type: 'success'; key: string } | { type: 'failed' }> => {
-          try {
-            const res = await waitForAuth()
-            const startUrl = defaultStartUrl
-            const u = await fetchUsageLimits({
-              refresh: '',
-              access: res.accessToken,
-              expires: res.expiresAt,
-              authMethod: 'idc',
-              region,
-              clientId: res.clientId,
-              clientSecret: res.clientSecret
-            })
-            if (!u.email) throw new Error('No email')
-            const id = createDeterministicAccountId(u.email, 'idc', res.clientId)
-            const acc: ManagedAccount = {
-              id,
-              email: u.email,
-              authMethod: 'idc',
-              region,
-              clientId: res.clientId,
-              clientSecret: res.clientSecret,
-              startUrl: startUrl || undefined,
-              refreshToken: res.refreshToken,
-              accessToken: res.accessToken,
-              expiresAt: res.expiresAt,
-              rateLimitResetTime: 0,
-              isHealthy: true,
-              failCount: 0,
-              usedCount: u.usedCount,
-              limitCount: u.limitCount
-            }
-            await this.repository.save(acc)
-            return { type: 'success', key: res.accessToken }
-          } catch (e: any) {
-            return { type: 'failed' }
+          const usage = await fetchUsageLimits({
+            refresh: '',
+            access: token.accessToken,
+            expires: token.expiresAt,
+            authMethod: 'idc',
+            region: serviceRegion,
+            clientId: token.clientId,
+            clientSecret: token.clientSecret
+          })
+          if (!usage.email) return { type: 'failed' }
+
+          const id = createDeterministicAccountId(usage.email, 'idc', token.clientId)
+          const acc: ManagedAccount = {
+            id,
+            email: usage.email,
+            authMethod: 'idc',
+            region: serviceRegion,
+            oidcRegion,
+            clientId: token.clientId,
+            clientSecret: token.clientSecret,
+            startUrl: startUrl || undefined,
+            refreshToken: token.refreshToken,
+            accessToken: token.accessToken,
+            expiresAt: token.expiresAt,
+            rateLimitResetTime: 0,
+            isHealthy: true,
+            failCount: 0,
+            usedCount: usage.usedCount,
+            limitCount: usage.limitCount
           }
+
+          await this.repository.save(acc)
+          this.accountManager?.addAccount?.(acc)
+
+          return { type: 'success', key: token.accessToken }
+        } catch (e: any) {
+          logger.warn('IDC auth callback failed', e)
+          return { type: 'failed' }
         }
-      })
-    } catch (e: any) {
-      resolve({
-        url: '',
-        instructions: 'Failed',
-        method: 'auto',
-        callback: async (): Promise<{ type: 'failed' }> => ({ type: 'failed' })
-      })
+      }
     }
   }
 }

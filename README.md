@@ -116,11 +116,24 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
 2. **Direct Authentication**:
    - Run `opencode auth login`.
    - Select `Other`, type `kiro`, and press enter.
-   - A browser page will open asking for your **IAM Identity Center Start URL**.
+   - You'll be prompted for your **IAM Identity Center Start URL** and **IAM Identity Center region** (`sso_region`).
      - Leave it blank to sign in with **AWS Builder ID**.
      - Enter your company's Start URL (e.g. `https://your-company.awsapps.com/start`) to use **IAM Identity Center (SSO)**.
-   - You can also pre-configure the Start URL in `~/.config/opencode/kiro.json` via `idc_start_url` to skip the prompt.
+   - A browser window will open directly to AWS' verification URL (no local auth server). If it doesn't, copy/paste the URL and enter the code printed by OpenCode.
+   - You can also pre-configure defaults in `~/.config/opencode/kiro.json` via `idc_start_url` and `idc_region`.
 3. Configuration will be automatically managed at `~/.config/opencode/kiro.db`.
+
+## Local plugin development
+
+To run this plugin from a local checkout (without publishing to npm), you can use OpenCode's local plugin loading:
+
+1. Build this repo: `bun run build` (or `npm run build`)
+2. Create `~/.config/opencode/plugins/kiro-auth-local.ts`:
+
+```ts
+import { KiroOAuthPlugin } from '/absolute/path/to/opencode-kiro-auth/dist/index.js'
+export default KiroOAuthPlugin
+```
 
 ## Troubleshooting
 
@@ -159,14 +172,13 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
   "account_selection_strategy": "lowest-usage",
   "default_region": "us-east-1",
   "idc_start_url": "https://your-company.awsapps.com/start",
+  "idc_region": "us-east-1",
   "rate_limit_retry_delay_ms": 5000,
   "rate_limit_max_retries": 3,
   "max_request_iterations": 20,
   "request_timeout_ms": 120000,
   "token_expiry_buffer_ms": 120000,
   "usage_sync_max_retries": 3,
-  "auth_server_port_start": 19847,
-  "auth_server_port_range": 10,
   "usage_tracking_enabled": true,
   "enable_log_api_request": false
 }
@@ -177,15 +189,16 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
 - `auto_sync_kiro_cli`: Automatically sync sessions from Kiro CLI (default: `true`).
 - `account_selection_strategy`: Account rotation strategy (`sticky`, `round-robin`, `lowest-usage`).
 - `default_region`: AWS region (`us-east-1`, `us-west-2`).
-- `idc_start_url`: Pre-configure your IAM Identity Center Start URL (e.g. `https://your-company.awsapps.com/start`). If set, the browser auth page will pre-fill this value. Leave unset to default to AWS Builder ID.
+- `idc_start_url`: Default IAM Identity Center Start URL (e.g. `https://your-company.awsapps.com/start`). Leave unset/blank to default to AWS Builder ID.
+- `idc_region`: IAM Identity Center (SSO OIDC) region (`sso_region`). Defaults to `us-east-1`.
 - `rate_limit_retry_delay_ms`: Delay between rate limit retries (1000-60000ms).
 - `rate_limit_max_retries`: Maximum retry attempts for rate limits (0-10).
 - `max_request_iterations`: Maximum loop iterations to prevent hangs (10-1000).
 - `request_timeout_ms`: Request timeout in milliseconds (60000-600000ms).
 - `token_expiry_buffer_ms`: Token refresh buffer time (30000-300000ms).
 - `usage_sync_max_retries`: Retry attempts for usage sync (0-5).
-- `auth_server_port_start`: Starting port for auth server (1024-65535).
-- `auth_server_port_range`: Number of ports to try (1-100).
+- `auth_server_port_start`: Legacy/ignored (no local auth server).
+- `auth_server_port_range`: Legacy/ignored (no local auth server).
 - `usage_tracking_enabled`: Enable usage tracking and toast notifications.
 - `enable_log_api_request`: Enable detailed API request logging.
 

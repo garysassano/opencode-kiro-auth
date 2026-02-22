@@ -45,6 +45,7 @@ export const KiroConfigSchema = z.object({
   $schema: z.string().optional(),
 
   idc_start_url: z.string().url().optional(),
+  idc_region: RegionSchema.optional(),
 
   account_selection_strategy: AccountSelectionStrategySchema.default('lowest-usage'),
 

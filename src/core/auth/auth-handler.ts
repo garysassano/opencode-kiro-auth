@@ -1,5 +1,6 @@
 import type { AuthHook } from '@opencode-ai/plugin'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
+import { RegionSchema } from '../../plugin/config/schema.js'
 import { IdcAuthMethod } from './idc-auth-method.js'
 
 export class AuthHandler {
@@ -27,7 +28,7 @@ export class AuthHandler {
       return []
     }
 
-    const idcMethod = new IdcAuthMethod(this.config, this.repository)
+    const idcMethod = new IdcAuthMethod(this.config, this.repository, this.accountManager)
 
     return [
       {
@@ -47,6 +48,18 @@ export class AuthHandler {
               } catch {
                 return 'Please enter a valid URL'
               }
+            }
+          },
+          {
+            type: 'text' as const,
+            key: 'idc_region',
+            message: 'IAM Identity Center region (sso_region) (leave blank for us-east-1)',
+            placeholder: 'us-east-1',
+            validate: (value: string) => {
+              if (!value) return undefined
+              return RegionSchema.safeParse(value.trim()).success
+                ? undefined
+                : 'Please enter a valid AWS region'
             }
           }
         ],

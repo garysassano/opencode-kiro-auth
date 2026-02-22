@@ -16,6 +16,7 @@ export class AccountRepository {
       email: r.email,
       authMethod: r.auth_method,
       region: r.region,
+      oidcRegion: r.oidc_region || undefined,
       clientId: r.client_id,
       clientSecret: r.client_secret,
       profileArn: r.profile_arn,
