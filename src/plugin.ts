@@ -32,7 +32,6 @@ export const createKiroPlugin =
       auth: {
         provider: id,
         loader: async (getAuth: any) => {
-          await getAuth()
           await authHandler.initialize()
 
           return {
@@ -41,7 +40,8 @@ export const createKiroPlugin =
               '{{region}}',
               config.default_region || 'us-east-1'
             ),
-            fetch: (input: any, init?: any) => requestHandler.handle(input, init, showToast)
+            fetch: (input: any, init?: any) =>
+              requestHandler.handle(input, init, showToast, getAuth)
           }
         },
         methods: authHandler.getMethods()

@@ -119,6 +119,9 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
    - You'll be prompted for your **IAM Identity Center Start URL** and **IAM Identity Center region** (`sso_region`).
      - Leave it blank to sign in with **AWS Builder ID**.
      - Enter your company's Start URL (e.g. `https://your-company.awsapps.com/start`) to use **IAM Identity Center (SSO)**.
+   - For **IAM Identity Center**, you may also need a **Q Developer / CodeWhisperer profile ARN** (`profileArn`).
+     - If `kiro-cli` is installed and you've selected a profile once (`kiro-cli profile`), the plugin auto-detects it.
+     - Otherwise, provide it in the login prompt or set `idc_profile_arn` in `~/.config/opencode/kiro.json`.
    - A browser window will open directly to AWS' verification URL (no local auth server). If it doesn't, copy/paste the URL and enter the code printed by OpenCode.
    - You can also pre-configure defaults in `~/.config/opencode/kiro.json` via `idc_start_url` and `idc_region`.
 3. Configuration will be automatically managed at `~/.config/opencode/kiro.db`.

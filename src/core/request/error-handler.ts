@@ -85,7 +85,6 @@ export class ErrorHandler {
       await this.repository.batchSave(this.accountManager.getAccounts())
       const count = this.accountManager.getAccountCount()
       if (count > 1) {
-        showToast(`Rate limited (${account.email}). Switching account...`, 'warning')
         return { shouldRetry: true, switchAccount: true }
       }
       showToast(`Rate limited. Waiting ${Math.ceil(w / 1000)}s...`, 'warning')
@@ -119,7 +118,6 @@ export class ErrorHandler {
       }
       this.accountManager.markUnhealthy(account, errorReason)
       await this.repository.batchSave(this.accountManager.getAccounts())
-      showToast(`${errorReason} (${account.email}). Switching account...`, 'warning')
       return { shouldRetry: true, switchAccount: true }
     }
 

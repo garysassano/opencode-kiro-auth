@@ -38,20 +38,26 @@ export class RequestHandler {
     this.retryStrategy = new RetryStrategy(config)
   }
 
-  async handle(input: any, init: any, showToast: ToastFunction): Promise<Response> {
+  async handle(
+    input: any,
+    init: any,
+    showToast: ToastFunction,
+    getAuth?: () => Promise<any>
+  ): Promise<Response> {
     const url = typeof input === 'string' ? input : input.url
 
     if (!KIRO_API_PATTERN.test(url)) {
       return fetch(input, init)
     }
 
-    return this.handleKiroRequest(url, init, showToast)
+    return this.handleKiroRequest(url, init, showToast, getAuth)
   }
 
   private async handleKiroRequest(
     url: string,
     init: any,
-    showToast: ToastFunction
+    showToast: ToastFunction,
+    getAuth?: () => Promise<any>
   ): Promise<Response> {
     const body = init?.body ? JSON.parse(init.body) : {}
     const model = this.extractModel(url) || body.model || 'claude-sonnet-4-5'
@@ -61,6 +67,7 @@ export class RequestHandler {
     let reductionFactor = 1.0
     let retry = 0
     let consecutiveNullAccounts = 0
+    let promptedLogin = false
     const retryContext = this.retryStrategy.createContext()
 
     while (true) {
@@ -73,7 +80,18 @@ export class RequestHandler {
         throw new Error('All accounts are permanently unhealthy (quota exceeded or suspended)')
       }
 
-      let acc = await this.accountSelector.selectHealthyAccount(showToast)
+      let acc: any
+      try {
+        acc = await this.accountSelector.selectHealthyAccount(showToast)
+      } catch (e: any) {
+        const msg = e instanceof Error ? e.message : String(e)
+        if (msg === 'No accounts' && getAuth && !promptedLogin) {
+          promptedLogin = true
+          await getAuth()
+          continue
+        }
+        throw e
+      }
       if (!acc) {
         consecutiveNullAccounts++
         const backoffDelay = Math.min(1000 * Math.pow(2, consecutiveNullAccounts - 1), 10000)

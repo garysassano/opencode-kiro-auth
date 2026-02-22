@@ -50,6 +50,12 @@ export async function syncFromKiroCli() {
         let profileArn: string | undefined = data.profile_arn || data.profileArn
         if (!profileArn && isIdc) profileArn = activeProfileArn || readActiveProfileArnFromKiroCli()
         const serviceRegion = extractRegionFromArn(profileArn) || oidcRegion
+        const startUrl: string | undefined =
+          typeof data.start_url === 'string'
+            ? data.start_url
+            : typeof data.startUrl === 'string'
+              ? data.startUrl
+              : undefined
 
         const accessToken = data.access_token || data.accessToken || ''
         const refreshToken = data.refresh_token || data.refreshToken
@@ -178,6 +184,7 @@ export async function syncFromKiroCli() {
           clientId,
           clientSecret,
           profileArn,
+          startUrl,
           refreshToken,
           accessToken,
           expiresAt: cliExpiresAt,
