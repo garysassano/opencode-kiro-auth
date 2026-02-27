@@ -10,6 +10,7 @@ export interface KiroAuthDetails {
   expires: number
   authMethod: KiroAuthMethod
   region: KiroRegion
+  oidcRegion?: KiroRegion
   clientId?: string
   clientSecret?: string
   email?: string
@@ -29,6 +30,7 @@ export interface ManagedAccount {
   email: string
   authMethod: KiroAuthMethod
   region: KiroRegion
+  oidcRegion?: KiroRegion
   clientId?: string
   clientSecret?: string
   profileArn?: string

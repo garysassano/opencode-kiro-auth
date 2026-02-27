@@ -5,6 +5,7 @@ export function runMigrations(db: Database): void {
   migrateRealEmailColumn(db)
   migrateUsageTable(db)
   migrateStartUrlColumn(db)
+  migrateOidcRegionColumn(db)
 }
 
 function migrateToUniqueRefreshToken(db: Database): void {
@@ -82,7 +83,8 @@ function migrateRealEmailColumn(db: Database): void {
       db.run(`
           CREATE TABLE accounts_new (
             id TEXT PRIMARY KEY, email TEXT NOT NULL, auth_method TEXT NOT NULL,
-            region TEXT NOT NULL, client_id TEXT, client_secret TEXT, profile_arn TEXT,
+            region TEXT NOT NULL, oidc_region TEXT, client_id TEXT, client_secret TEXT, profile_arn TEXT,
+            start_url TEXT,
             refresh_token TEXT NOT NULL, access_token TEXT NOT NULL, expires_at INTEGER NOT NULL,
             rate_limit_reset INTEGER DEFAULT 0, is_healthy INTEGER DEFAULT 1, unhealthy_reason TEXT,
             recovery_time INTEGER, fail_count INTEGER DEFAULT 0, last_used INTEGER DEFAULT 0,
@@ -90,8 +92,8 @@ function migrateRealEmailColumn(db: Database): void {
           )
         `)
       db.run(`
-          INSERT INTO accounts_new (id, email, auth_method, region, client_id, client_secret, profile_arn, refresh_token, access_token, expires_at, rate_limit_reset, is_healthy, unhealthy_reason, recovery_time, fail_count, last_used, used_count, limit_count, last_sync)
-          SELECT id, email, auth_method, region, client_id, client_secret, profile_arn, refresh_token, access_token, expires_at, COALESCE(rate_limit_reset, 0), COALESCE(is_healthy, 1), unhealthy_reason, recovery_time, COALESCE(fail_count, 0), COALESCE(last_used, 0), 0, 0, 0 FROM accounts
+          INSERT INTO accounts_new (id, email, auth_method, region, oidc_region, client_id, client_secret, profile_arn, start_url, refresh_token, access_token, expires_at, rate_limit_reset, is_healthy, unhealthy_reason, recovery_time, fail_count, last_used, used_count, limit_count, last_sync)
+          SELECT id, email, auth_method, region, NULL, client_id, client_secret, profile_arn, NULL, refresh_token, access_token, expires_at, COALESCE(rate_limit_reset, 0), COALESCE(is_healthy, 1), unhealthy_reason, recovery_time, COALESCE(fail_count, 0), COALESCE(last_used, 0), 0, 0, 0 FROM accounts
         `)
       db.run('DROP TABLE accounts')
       db.run('ALTER TABLE accounts_new RENAME TO accounts')
@@ -133,4 +135,14 @@ function migrateStartUrlColumn(db: Database): void {
   if (!names.has('start_url')) {
     db.run('ALTER TABLE accounts ADD COLUMN start_url TEXT')
   }
+}
+
+function migrateOidcRegionColumn(db: Database): void {
+  const columns = db.prepare('PRAGMA table_info(accounts)').all() as any[]
+  const names = new Set(columns.map((c) => c.name))
+  if (!names.has('oidc_region')) {
+    db.run('ALTER TABLE accounts ADD COLUMN oidc_region TEXT')
+  }
+  // Backfill: historically `region` was used for both service + OIDC.
+  db.run('UPDATE accounts SET oidc_region = region WHERE oidc_region IS NULL OR oidc_region = \"\"')
 }

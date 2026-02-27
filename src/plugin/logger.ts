@@ -17,7 +17,21 @@ const writeToFile = (level: string, message: string, ...args: unknown[]) => {
     mkdirSync(dir, { recursive: true })
     const path = join(dir, 'plugin.log')
     const timestamp = new Date().toISOString()
-    const content = `[${timestamp}] ${level}: ${message} ${args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')}\n`
+    const content = `[${timestamp}] ${level}: ${message} ${args
+      .map((a) => {
+        if (a instanceof Error) {
+          return `${a.name}: ${a.message}${a.stack ? `\n${a.stack}` : ''}`
+        }
+        if (typeof a === 'object') {
+          try {
+            return JSON.stringify(a)
+          } catch {
+            return '[Unserializable object]'
+          }
+        }
+        return String(a)
+      })
+      .join(' ')}\n`
     appendFileSync(path, content)
   } catch (e) {}
 }

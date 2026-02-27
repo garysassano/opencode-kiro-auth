@@ -1,5 +1,7 @@
 import type { AuthHook } from '@opencode-ai/plugin'
 import type { AccountRepository } from '../../infrastructure/database/account-repository.js'
+import { RegionSchema } from '../../plugin/config/schema.js'
+import * as logger from '../../plugin/logger.js'
 import { IdcAuthMethod } from './idc-auth-method.js'
 
 export class AuthHandler {
@@ -13,8 +15,16 @@ export class AuthHandler {
   async initialize(): Promise<void> {
     const { syncFromKiroCli } = await import('../../plugin/sync/kiro-cli.js')
 
+    logger.log('Auth init', { autoSyncKiroCli: !!this.config.auto_sync_kiro_cli })
     if (this.config.auto_sync_kiro_cli) {
+      logger.log('Kiro CLI sync: start')
       await syncFromKiroCli()
+      this.repository.invalidateCache()
+      const accounts = await this.repository.findAll()
+      if (this.accountManager) {
+        for (const a of accounts) this.accountManager.addAccount(a)
+      }
+      logger.log('Kiro CLI sync: done', { importedAccounts: accounts.length })
     }
   }
 
@@ -27,7 +37,7 @@ export class AuthHandler {
       return []
     }
 
-    const idcMethod = new IdcAuthMethod(this.config, this.repository)
+    const idcMethod = new IdcAuthMethod(this.config, this.repository, this.accountManager)
 
     return [
       {
@@ -47,6 +57,18 @@ export class AuthHandler {
               } catch {
                 return 'Please enter a valid URL'
               }
+            }
+          },
+          {
+            type: 'text' as const,
+            key: 'idc_region',
+            message: 'IAM Identity Center region (sso_region) (leave blank for us-east-1)',
+            placeholder: 'us-east-1',
+            validate: (value: string) => {
+              if (!value) return undefined
+              return RegionSchema.safeParse(value.trim()).success
+                ? undefined
+                : 'Please enter a valid AWS region'
             }
           }
         ],

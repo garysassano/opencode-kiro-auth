@@ -146,13 +146,55 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
 2. **Direct Authentication**:
    - Run `opencode auth login`.
    - Select `Other`, type `kiro`, and press enter.
-   - A browser page will open asking for your **IAM Identity Center Start URL**.
+   - You'll be prompted for your **IAM Identity Center Start URL** and **IAM Identity Center region** (`sso_region`).
      - Leave it blank to sign in with **AWS Builder ID**.
      - Enter your company's Start URL (e.g. `https://your-company.awsapps.com/start`) to use **IAM Identity Center (SSO)**.
-   - You can also pre-configure the Start URL in `~/.config/opencode/kiro.json` via `idc_start_url` to skip the prompt.
+   - Note: the TUI `/connect` flow currently does **not** run plugin OAuth prompts (Start URL / region), so Identity Center logins may fall back to Builder ID unless you use `opencode auth login` (or preconfigure defaults in `~/.config/opencode/kiro.json`).
+   - For **IAM Identity Center**, you may also need a **profile ARN** (`profileArn`).
+     - If `kiro-cli` is installed and you've selected a profile once (`kiro-cli profile`), the plugin auto-detects it.
+     - Otherwise, set `idc_profile_arn` in `~/.config/opencode/kiro.json`.
+   - A browser window will open directly to AWS' verification URL (no local auth server). If it doesn't, copy/paste the URL and enter the code printed by OpenCode.
+   - You can also pre-configure defaults in `~/.config/opencode/kiro.json` via `idc_start_url` and `idc_region`.
 3. Configuration will be automatically managed at `~/.config/opencode/kiro.db`.
 
+## Local plugin development
+
+OpenCode installs plugins into a cache directory (typically `~/.cache/opencode/node_modules`).
+
+The simplest way to test local changes (without publishing to npm) is to build this repo and hot-swap the cached plugin `dist/` folder:
+
+1. Build this repo: `bun run build` (or `npm run build`)
+2. Hot-swap `dist/` (creates a timestamped backup):
+
+```bash
+PLUGIN_DIR="$HOME/.cache/opencode/node_modules/@zhafron/opencode-kiro-auth"
+TS=$(date +%Y%m%d-%H%M%S)
+cp -a "$PLUGIN_DIR/dist" "$PLUGIN_DIR/dist.bak.$TS"
+rm -rf "$PLUGIN_DIR/dist"
+cp -a "/absolute/path/to/opencode-kiro-auth/dist" "$PLUGIN_DIR/dist"
+echo "Backup at: $PLUGIN_DIR/dist.bak.$TS"
+```
+
+Revert:
+
+```bash
+PLUGIN_DIR="$HOME/.cache/opencode/node_modules/@zhafron/opencode-kiro-auth"
+rm -rf "$PLUGIN_DIR/dist"
+mv "$PLUGIN_DIR/dist.bak.YYYYMMDD-HHMMSS" "$PLUGIN_DIR/dist"
+```
+
 ## Troubleshooting
+
+### Error: Status: 403 (AccessDeniedException / User is not authorized)
+
+If you're using **IAM Identity Center** (a custom Start URL), the Q Developer / CodeWhisperer APIs typically require a **profile ARN**.
+
+This plugin reads the active profile ARN from your local `kiro-cli` database (`state.key = api.codewhisperer.profile`) and sends it as `profileArn`.
+
+Fix:
+
+1. Run `kiro-cli profile` and select a profile (e.g. `QDevProfile-us-east-1`).
+2. Retry `opencode auth login` (or restart OpenCode so it re-syncs).
 
 ### Error: No accounts
 
@@ -161,6 +203,10 @@ This happens when the plugin has no records in `~/.config/opencode/kiro.db`.
 1. Ensure `kiro-cli login` succeeds.
 2. Ensure `auto_sync_kiro_cli` is `true` in `~/.config/opencode/kiro.json`.
 3. Retry the request; the plugin will attempt a Kiro CLI sync when it detects zero accounts.
+
+### Note: `/connect` vs `opencode auth login`
+
+If you need to enter provider-specific values for an OAuth login (like IAM Identity Center Start URL / region), use `opencode auth login`. The current TUI `/connect` flow may not display plugin OAuth prompts, so it can’t collect those inputs.
 
 Note for IDC/SSO (ODIC): the plugin may temporarily create an account with a placeholder email if it cannot fetch the real email during sync (e.g. offline). It will replace it with the real email once usage/email lookup succeeds.
 
@@ -189,14 +235,13 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
   "account_selection_strategy": "lowest-usage",
   "default_region": "us-east-1",
   "idc_start_url": "https://your-company.awsapps.com/start",
+  "idc_region": "us-east-1",
   "rate_limit_retry_delay_ms": 5000,
   "rate_limit_max_retries": 3,
   "max_request_iterations": 20,
   "request_timeout_ms": 120000,
   "token_expiry_buffer_ms": 120000,
   "usage_sync_max_retries": 3,
-  "auth_server_port_start": 19847,
-  "auth_server_port_range": 10,
   "usage_tracking_enabled": true,
   "enable_log_api_request": false
 }
@@ -207,15 +252,16 @@ The plugin supports extensive configuration options. Edit `~/.config/opencode/ki
 - `auto_sync_kiro_cli`: Automatically sync sessions from Kiro CLI (default: `true`).
 - `account_selection_strategy`: Account rotation strategy (`sticky`, `round-robin`, `lowest-usage`).
 - `default_region`: AWS region (`us-east-1`, `us-west-2`).
-- `idc_start_url`: Pre-configure your IAM Identity Center Start URL (e.g. `https://your-company.awsapps.com/start`). If set, the browser auth page will pre-fill this value. Leave unset to default to AWS Builder ID.
+- `idc_start_url`: Default IAM Identity Center Start URL (e.g. `https://your-company.awsapps.com/start`). Leave unset/blank to default to AWS Builder ID.
+- `idc_region`: IAM Identity Center (SSO OIDC) region (`sso_region`). Defaults to `us-east-1`.
 - `rate_limit_retry_delay_ms`: Delay between rate limit retries (1000-60000ms).
 - `rate_limit_max_retries`: Maximum retry attempts for rate limits (0-10).
 - `max_request_iterations`: Maximum loop iterations to prevent hangs (10-1000).
 - `request_timeout_ms`: Request timeout in milliseconds (60000-600000ms).
 - `token_expiry_buffer_ms`: Token refresh buffer time (30000-300000ms).
 - `usage_sync_max_retries`: Retry attempts for usage sync (0-5).
-- `auth_server_port_start`: Starting port for auth server (1024-65535).
-- `auth_server_port_range`: Number of ports to try (1-100).
+- `auth_server_port_start`: Legacy/ignored (no local auth server).
+- `auth_server_port_range`: Legacy/ignored (no local auth server).
 - `usage_tracking_enabled`: Enable usage tracking and toast notifications.
 - `enable_log_api_request`: Enable detailed API request logging.
 

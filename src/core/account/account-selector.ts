@@ -53,25 +53,6 @@ export class AccountSelector {
 
     this.resetCircuitBreaker()
 
-    if (this.accountManager.shouldShowToast()) {
-      showToast(
-        `Using ${acc.email} (${this.accountManager.getAccounts().indexOf(acc) + 1}/${count})`,
-        'info'
-      )
-    }
-
-    if (
-      this.accountManager.shouldShowUsageToast() &&
-      acc.usedCount !== undefined &&
-      acc.limitCount !== undefined
-    ) {
-      const p = acc.limitCount > 0 ? (acc.usedCount / acc.limitCount) * 100 : 0
-      showToast(
-        this.formatUsageMessage(acc.usedCount, acc.limitCount, acc.email),
-        p >= 80 ? 'warning' : 'info'
-      )
-    }
-
     return acc
   }
 

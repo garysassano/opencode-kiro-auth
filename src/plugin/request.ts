@@ -153,6 +153,7 @@ export function transformToCodeWhisperer(
       }
     }
   }
+  if (auth.profileArn) request.profileArn = auth.profileArn
   const toolUsesInHistory = history.flatMap((h) => h.assistantResponseMessage?.toolUses || [])
   const allToolUseIdsInHistory = new Set(toolUsesInHistory.map((tu) => tu.toolUseId))
   const finalCurTrs: any[] = []

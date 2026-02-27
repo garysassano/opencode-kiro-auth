@@ -5,8 +5,9 @@ import type { KiroAuthDetails, RefreshParts } from './types'
 export async function refreshAccessToken(auth: KiroAuthDetails): Promise<KiroAuthDetails> {
   const p = decodeRefreshToken(auth.refresh)
   const isIdc = auth.authMethod === 'idc'
+  const oidcRegion = auth.oidcRegion || auth.region
   const url = isIdc
-    ? `https://oidc.${auth.region}.amazonaws.com/token`
+    ? `https://oidc.${oidcRegion}.amazonaws.com/token`
     : `https://prod.${auth.region}.auth.desktop.kiro.dev/refreshToken`
 
   if (isIdc && (!p.clientId || !p.clientSecret)) {
@@ -74,6 +75,8 @@ export async function refreshAccessToken(auth: KiroAuthDetails): Promise<KiroAut
       expires: Date.now() + (d.expires_in || d.expiresIn || 3600) * 1000,
       authMethod: auth.authMethod,
       region: auth.region,
+      oidcRegion: auth.oidcRegion,
+      profileArn: auth.profileArn,
       clientId: auth.clientId,
       clientSecret: auth.clientSecret,
       email: auth.email || d.userInfo?.email
