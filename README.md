@@ -25,7 +25,6 @@ Add the plugin to your `opencode.json` or `opencode.jsonc`:
   "plugin": ["@zhafron/opencode-kiro-auth"],
   "provider": {
     "kiro": {
-      "npm": "@zhafron/opencode-kiro-auth",
       "models": {
         "claude-sonnet-4-5": {
           "name": "Claude Sonnet 4.5",
